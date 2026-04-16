@@ -1,7 +1,9 @@
 package top.dlsloveyy.backendtest.controller;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+import top.dlsloveyy.backendtest.entity.TradeOrder;
 import top.dlsloveyy.backendtest.model.dto.OrderCreateDTO;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
 import top.dlsloveyy.backendtest.service.TradeOrderService;
@@ -122,5 +124,28 @@ public class TradeOrderController {
         Long sellerId = getUserId(request);
         if (sellerId == null) return ResponseResult.error(401, "请先登录");
         return tradeOrderService.rejectRefund(id, sellerId);
+    }
+
+    /**
+     * 获取当前用户需要处理的订单通知数量
+     * 卖家：待发货(1) + 退款申请中(6)
+     * 买家：已发货待收货(2)
+     */
+    @GetMapping("/notify-count")
+    public ResponseResult<?> getNotifyCount(HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return ResponseResult.error(401, "请先登录");
+
+        long sellerCount = tradeOrderService.count(
+            new LambdaQueryWrapper<TradeOrder>()
+                .eq(TradeOrder::getSellerId, userId)
+                .in(TradeOrder::getStatus, 1, 6)
+        );
+        long buyerCount = tradeOrderService.count(
+            new LambdaQueryWrapper<TradeOrder>()
+                .eq(TradeOrder::getBuyerId, userId)
+                .eq(TradeOrder::getStatus, 2)
+        );
+        return ResponseResult.success(sellerCount + buyerCount);
     }
 }

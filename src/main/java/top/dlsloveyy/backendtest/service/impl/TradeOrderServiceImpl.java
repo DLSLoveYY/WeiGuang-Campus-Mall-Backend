@@ -223,11 +223,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             order.setUpdateTime(LocalDateTime.now());
             this.updateById(order);
 
-            // 🚀 新增：如果是余额退款，还需要把钱退给买家（毕设可选，加上更严谨）
-            // 如果你加了这句，记得确保订单记录了他是用什么方式付的款。简化处理的话直接执行：
-            // userService.increaseBalance(buyerId, order.getOrderPrice());
-
             restoreGoodsStock(order.getGoodsId());
+
+            try {
+                userService.increaseBalance(order.getBuyerId(), order.getOrderPrice());
+            } catch (Exception e) {
+                throw new RuntimeException("退款失败：资金退还异常 - " + e.getMessage());
+            }
+
             return ResponseResult.success("退款成功，资金已原路返回");
         } else if (order.getStatus() == 2) {
             order.setStatus(6);
@@ -255,7 +258,13 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         this.updateById(order);
         restoreGoodsStock(order.getGoodsId());
 
-        return ResponseResult.success("已同意退款");
+        try {
+            userService.increaseBalance(order.getBuyerId(), order.getOrderPrice());
+        } catch (Exception e) {
+            throw new RuntimeException("退款失败：资金退还异常 - " + e.getMessage());
+        }
+
+        return ResponseResult.success("已同意退款，资金已退回买家账户");
     }
 
     @Override

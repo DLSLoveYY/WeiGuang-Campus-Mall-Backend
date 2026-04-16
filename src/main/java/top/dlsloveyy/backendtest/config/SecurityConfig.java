@@ -13,11 +13,12 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-                .cors()   // ✅ 开启 CORS 支持
+                .cors()
                 .and()
                 .csrf().disable()
                 .authorizeHttpRequests()
-                .requestMatchers("/**").permitAll(); // 允许所有请求访问
+                .requestMatchers("/ws/**", "/ws/info/**").permitAll() // WebSocket 端点
+                .requestMatchers("/**").permitAll();
 
         return http.build();
     }

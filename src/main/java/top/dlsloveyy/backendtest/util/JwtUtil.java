@@ -13,7 +13,9 @@ import java.util.Date;
 @Component
 public class JwtUtil {
 
-    private static final long EXPIRATION_TIME = 86400000; // 1 天
+    private static final long EXPIRATION_TIME = 86400000;           // 旧版兼容：1 天
+    private static final long ACCESS_TOKEN_EXPIRY  = 15 * 60 * 1000L;            // 15 分钟
+    private static final long REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60 * 1000L;  // 7 天
 
     @Value("${jwt.secret}")
     private String secret;
@@ -98,5 +100,67 @@ public class JwtUtil {
             token = token.substring(7);
         }
         return getUsernameFromToken(token);
+    }
+
+    // ==================== 双Token 鉴权方法 ====================
+
+    /**
+     * 生成 AccessToken（15分钟），携带 tokenType=access 标识
+     */
+    public String generateAccessToken(Long userId, String username) {
+        return Jwts.builder()
+                .claim("userId", userId)
+                .claim("tokenType", "access")
+                .setSubject(username)
+                .setExpiration(new Date(System.currentTimeMillis() + ACCESS_TOKEN_EXPIRY))
+                .signWith(key)
+                .compact();
+    }
+
+    /**
+     * 生成 RefreshToken（7天），携带 tokenType=refresh 标识
+     */
+    public String generateRefreshToken(Long userId) {
+        return Jwts.builder()
+                .claim("userId", userId)
+                .claim("tokenType", "refresh")
+                .setSubject(String.valueOf(userId))
+                .setExpiration(new Date(System.currentTimeMillis() + REFRESH_TOKEN_EXPIRY))
+                .signWith(key)
+                .compact();
+    }
+
+    /**
+     * 从 RefreshToken 中提取 userId，同时校验 tokenType
+     * 若 token 无效、过期或 tokenType 不是 refresh，返回 null
+     */
+    public Long getUserIdFromRefreshToken(String token) {
+        try {
+            Claims claims = Jwts.parserBuilder()
+                    .setSigningKey(key)
+                    .build()
+                    .parseClaimsJws(token)
+                    .getBody();
+            Object tokenType = claims.get("tokenType");
+            if (!"refresh".equals(tokenType)) {
+                return null;
+            }
+            Object userIdObj = claims.get("userId");
+            return userIdObj != null ? Long.valueOf(userIdObj.toString()) : null;
+        } catch (JwtException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 解析 token 并返回 Claims，会抛出 JwtException（含 ExpiredJwtException）
+     * 供 JwtFilter 捕获 ExpiredJwtException 并区分 token 类型
+     */
+    public Claims parseClaimsUnsafe(String token) throws JwtException {
+        return Jwts.parserBuilder()
+                .setSigningKey(key)
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
     }
 }

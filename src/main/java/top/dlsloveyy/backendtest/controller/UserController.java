@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import top.dlsloveyy.backendtest.annotation.RateLimit;
 import top.dlsloveyy.backendtest.entity.Follow;
 import top.dlsloveyy.backendtest.entity.Goods;
 import top.dlsloveyy.backendtest.entity.User;
@@ -46,7 +47,8 @@ public class UserController {
 
     private final UserService userService;
 
-    // ✅ 登录接口
+    // ✅ 登录接口（5次/分钟 IP 限流，防暴力破解）
+    @RateLimit(max = 5, window = 60)
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody User loginUser) {
         String username = loginUser.getUsername();
@@ -62,13 +64,21 @@ public class UserController {
             return ResponseEntity.ok(Map.of("code", 401, "message", "用户名或密码错误"));
         }
 
-        String token = jwtUtil.generateToken(user.getId(), username);
-        redisTemplate.opsForValue().set("token:" + username, token, 7, TimeUnit.DAYS);
+        // 双Token：生成 AccessToken（15分钟）和 RefreshToken（7天）
+        String accessToken  = jwtUtil.generateAccessToken(user.getId(), username);
+        String refreshToken = jwtUtil.generateRefreshToken(user.getId());
+
+        // RefreshToken 存入 Redis，key 按 userId，用于刷新校验和登出失效
+        redisTemplate.opsForValue().set("refresh_token:" + user.getId(), refreshToken, 7, TimeUnit.DAYS);
+        // 保留旧式 key 兼容 logout 删除逻辑
+        redisTemplate.opsForValue().set("token:" + username, accessToken, 7, TimeUnit.DAYS);
 
         return ResponseEntity.ok(Map.of(
                 "code", 200,
                 "message", "登录成功",
-                "token", token,
+                "token", accessToken,        // 旧字段，保持前端兼容
+                "accessToken", accessToken,
+                "refreshToken", refreshToken,
                 "id", user.getId(),
                 "username", user.getUsername(),
                 "isAdmin", user.getIsAdmin()
@@ -352,8 +362,14 @@ public class UserController {
     @PostMapping("/logout")
     public ResponseEntity<?> logout(@RequestHeader("Authorization") String token) {
         try {
-            String username = jwtUtil.extractUsername(token.replace("Bearer ", ""));
+            String rawToken = token.replace("Bearer ", "");
+            String username = jwtUtil.extractUsername(rawToken);
+            Long userId = jwtUtil.getUserIdFromToken(rawToken);
+
             redisTemplate.delete("token:" + username);
+            if (userId != null) {
+                redisTemplate.delete("refresh_token:" + userId);
+            }
             return ResponseEntity.ok(Map.of("code", 200, "message", "退出登录成功"));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("code", 400, "message", "退出失败或Token无效"));

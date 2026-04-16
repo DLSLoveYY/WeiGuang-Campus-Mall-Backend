@@ -258,4 +258,25 @@ public class GoodsController {
 
         return ResponseEntity.ok(Map.of("code", 200, "data", myGoods));
     }
+
+    // ==========================================
+    // 8. 我的收藏列表
+    // ==========================================
+    @GetMapping("/favorites/my")
+    public ResponseEntity<?> getMyFavorites(@RequestHeader("Authorization") String token) {
+        String username = jwtUtil.extractUsername(token.replace("Bearer ", ""));
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null) return ResponseEntity.status(401).body(Map.of("code", 401, "message", "未登录"));
+
+        List<GoodsFavorite> favorites = goodsFavoriteMapper.selectList(
+                new LambdaQueryWrapper<GoodsFavorite>()
+                        .eq(GoodsFavorite::getUserId, user.getId())
+                        .orderByDesc(GoodsFavorite::getCreateTime)
+        );
+        if (favorites.isEmpty()) return ResponseEntity.ok(Map.of("code", 200, "data", List.of()));
+
+        List<Long> goodsIds = favorites.stream().map(GoodsFavorite::getGoodsId).toList();
+        List<Goods> goodsList = goodsMapper.selectBatchIds(goodsIds);
+        return ResponseEntity.ok(Map.of("code", 200, "data", goodsList));
+    }
 }

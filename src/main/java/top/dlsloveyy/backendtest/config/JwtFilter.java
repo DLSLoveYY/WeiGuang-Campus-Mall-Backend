@@ -1,6 +1,9 @@
 package top.dlsloveyy.backendtest.config;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,15 +18,15 @@ import top.dlsloveyy.backendtest.util.JwtUtil;
 import java.io.IOException;
 
 @Component
-public class JwtFilter extends OncePerRequestFilter { // ✅ 改用 OncePerRequestFilter
+public class JwtFilter extends OncePerRequestFilter {
 
     @Autowired
-    private UserMapper userMapper; // ✅ 直接注入，不要在 init 里手动获取
+    private UserMapper userMapper;
 
     @Autowired
     private JwtUtil jwtUtil;
 
-    // ThreadLocal 依然保留，这在 Service 层获取当前用户非常方便
+    // ThreadLocal 供 Service 层获取当前用户
     public static final ThreadLocal<User> currentUser = new ThreadLocal<>();
 
     @Override
@@ -36,24 +39,38 @@ public class JwtFilter extends OncePerRequestFilter { // ✅ 改用 OncePerReque
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
 
-            // 1. 从 Token 中解析出用户名
-            String username = jwtUtil.getUsernameFromToken(token);
+            try {
+                // 使用 parseClaimsUnsafe 解析，会在过期时抛出 ExpiredJwtException
+                Claims claims = jwtUtil.parseClaimsUnsafe(token);
+                String username = claims.getSubject();
 
-            if (username != null) {
-                // 2. 查库获取完整用户信息
-                User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-                if (user != null) {
-                    // 3. 存入 ThreadLocal
-                    currentUser.set(user);
+                if (username != null) {
+                    User user = userMapper.selectOne(
+                            new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+                    if (user != null) {
+                        currentUser.set(user);
+                    }
                 }
+            } catch (ExpiredJwtException ex) {
+                // 仅对新式 AccessToken（含 tokenType=access）返回 401，触发前端刷新
+                // 旧式 admin token（无 tokenType 字段）静默通过，不干扰管理端
+                Object tokenType = ex.getClaims().get("tokenType");
+                if ("access".equals(tokenType)) {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json;charset=UTF-8");
+                    response.getWriter().write("{\"code\":401,\"message\":\"AccessToken已过期，请刷新\"}");
+                    return;
+                }
+                // 旧式 token 过期：静默通过，ThreadLocal 中无用户
+            } catch (JwtException e) {
+                // token 签名非法等：静默通过
             }
         }
 
         try {
-            // 继续执行后面的过滤器或 Controller
             filterChain.doFilter(request, response);
         } finally {
-            // ⚠️ 极其重要：请求结束后必须清理 ThreadLocal，防止内存泄漏和数据污染
+            // 请求结束后必须清理 ThreadLocal，防止内存泄漏和数据污染
             currentUser.remove();
         }
     }
