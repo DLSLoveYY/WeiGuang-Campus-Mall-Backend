@@ -14,11 +14,10 @@ import top.dlsloveyy.backendtest.mapper.GoodsFavoriteMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
 import top.dlsloveyy.backendtest.util.JwtUtil;
-import top.dlsloveyy.backendtest.util.SensitiveWordFilter;
+import top.dlsloveyy.backendtest.service.AuditService;
 
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/goods")
@@ -33,6 +32,8 @@ public class GoodsController {
     private GoodsFavoriteMapper goodsFavoriteMapper;
     @Autowired
     private JwtUtil jwtUtil;
+    @Autowired
+    private AuditService auditService;
 
     // ==========================================
     // 1. 发布商品 (完美融合：敏感词检测 + 自动/人工审核分流)
@@ -53,18 +54,22 @@ public class GoodsController {
         goods.setFavoritesCount(0);
         goods.setCreateTime(LocalDateTime.now());
         goods.setUpdateTime(LocalDateTime.now());
+        if (goods.getConditionLevel() == null || goods.getConditionLevel().isBlank()) {
+            goods.setConditionLevel("成色未知");
+        }
 
-        // 核心逻辑：自动审核机制 (检测标题和详情)
-        boolean hasSensitive = SensitiveWordFilter.contains(goods.getTitle()) ||
-                SensitiveWordFilter.contains(goods.getDescription());
+        List<String> hits = auditService.findSensitiveHits(goods.getTitle(), goods.getDescription());
+        boolean hasSensitive = !hits.isEmpty();
 
         if (hasSensitive) {
-            // 🚨 架构升级：不需要单独的 CheckPost 表了！直接将 status 设为 0（待审核），列表接口会自动过滤掉它
             goods.setStatus(0);
             goodsMapper.insert(goods);
-            return ResponseEntity.ok(Map.of("code", 200, "message", "系统检测到内容疑似违规，商品已转入人工审核池，请耐心等待！"));
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "系统检测到内容疑似违规，商品已转入人工审核池，请耐心等待！",
+                    "hits", hits
+            ));
         } else {
-            // ✅ 正常通过：直接上架
             goods.setStatus(1);
             goodsMapper.insert(goods);
             return ResponseEntity.ok(Map.of("code", 200, "message", "商品发布成功，已自动上架！", "id", goods.getId()));
@@ -85,8 +90,8 @@ public class GoodsController {
         if (original == null) return ResponseEntity.status(404).body(Map.of("code", 404, "message", "商品不存在"));
         if (!original.getSellerId().equals(user.getId())) return ResponseEntity.status(403).body(Map.of("code", 403, "message", "无权修改"));
 
-        boolean hasSensitive = SensitiveWordFilter.contains(updatedGoods.getTitle()) ||
-                SensitiveWordFilter.contains(updatedGoods.getDescription());
+        List<String> hits = auditService.findSensitiveHits(updatedGoods.getTitle(), updatedGoods.getDescription());
+        boolean hasSensitive = !hits.isEmpty();
 
         // 更新内容
         original.setTitle(updatedGoods.getTitle());
@@ -94,6 +99,7 @@ public class GoodsController {
         original.setPrice(updatedGoods.getPrice());
         original.setOriginalPrice(updatedGoods.getOriginalPrice());
         original.setCategory(updatedGoods.getCategory());
+        original.setConditionLevel(updatedGoods.getConditionLevel());
         original.setDeliveryMethod(updatedGoods.getDeliveryMethod());
         original.setImages(updatedGoods.getImages());
         original.setUpdateTime(LocalDateTime.now());
@@ -132,7 +138,24 @@ public class GoodsController {
         queryWrapper.orderByDesc(Goods::getCreateTime);
         goodsMapper.selectPage(goodsPage, queryWrapper);
 
-        return ResponseEntity.ok(Map.of("code", 200, "data", goodsPage.getRecords(), "total", goodsPage.getTotal()));
+        List<Goods> records = goodsPage.getRecords();
+        if (!records.isEmpty()) {
+            Set<Long> sellerIds = records.stream().map(Goods::getSellerId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+            if (!sellerIds.isEmpty()) {
+                List<User> sellers = userMapper.selectBatchIds(sellerIds);
+                Map<Long, User> sellerMap = sellers.stream().collect(java.util.stream.Collectors.toMap(User::getId, u -> u));
+                records.forEach(g -> {
+                    User seller = sellerMap.get(g.getSellerId());
+                    if (seller != null) {
+                        g.setSellerName(seller.getUsername());
+                        String avatar = seller.getAvatar();
+                        g.setSellerAvatar(avatar == null ? "" : avatar);
+                    }
+                });
+            }
+        }
+
+        return ResponseEntity.ok(Map.of("code", 200, "data", records, "total", goodsPage.getTotal()));
     }
 
     // ==========================================

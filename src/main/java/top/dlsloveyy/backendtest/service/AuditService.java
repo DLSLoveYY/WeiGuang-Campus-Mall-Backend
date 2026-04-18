@@ -56,10 +56,15 @@ public class AuditService {
      * 简单关键词自动审核：返回 low / high
      */
     public String assessRisk(String title, String content) {
-        if (SensitiveWordFilter.contains(title) || SensitiveWordFilter.contains(content)) {
+        List<String> hits = SensitiveWordFilter.findAll((title == null ? "" : title) + " " + (content == null ? "" : content));
+        if (!hits.isEmpty()) {
             return "high";
         }
         return "low";
+    }
+
+    public List<String> findSensitiveHits(String title, String content) {
+        return SensitiveWordFilter.findAll((title == null ? "" : title) + " " + (content == null ? "" : content));
     }
 
 }

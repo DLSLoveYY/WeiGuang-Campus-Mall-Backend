@@ -25,4 +25,5 @@ public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
             "WHERE o.seller_id = #{userId} " +
             "ORDER BY o.create_time DESC")
     List<TradeOrderVO> selectMySales(@Param("userId") Long userId);
+
 }

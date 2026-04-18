@@ -9,6 +9,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import top.dlsloveyy.backendtest.entity.User;
@@ -16,6 +19,8 @@ import top.dlsloveyy.backendtest.mapper.UserMapper;
 import top.dlsloveyy.backendtest.util.JwtUtil;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 @Component
 public class JwtFilter extends OncePerRequestFilter {
@@ -40,7 +45,6 @@ public class JwtFilter extends OncePerRequestFilter {
             String token = authHeader.substring(7);
 
             try {
-                // 使用 parseClaimsUnsafe 解析，会在过期时抛出 ExpiredJwtException
                 Claims claims = jwtUtil.parseClaimsUnsafe(token);
                 String username = claims.getSubject();
 
@@ -49,11 +53,19 @@ public class JwtFilter extends OncePerRequestFilter {
                             new LambdaQueryWrapper<User>().eq(User::getUsername, username));
                     if (user != null) {
                         currentUser.set(user);
+
+                        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+                        authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
+                        if (Boolean.TRUE.equals(user.getIsAdmin())) {
+                            authorities.add(new SimpleGrantedAuthority("ROLE_ADMIN"));
+                        }
+
+                        UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(user.getUsername(), null, authorities);
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
                     }
                 }
             } catch (ExpiredJwtException ex) {
-                // 仅对新式 AccessToken（含 tokenType=access）返回 401，触发前端刷新
-                // 旧式 admin token（无 tokenType 字段）静默通过，不干扰管理端
                 Object tokenType = ex.getClaims().get("tokenType");
                 if ("access".equals(tokenType)) {
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
@@ -61,17 +73,16 @@ public class JwtFilter extends OncePerRequestFilter {
                     response.getWriter().write("{\"code\":401,\"message\":\"AccessToken已过期，请刷新\"}");
                     return;
                 }
-                // 旧式 token 过期：静默通过，ThreadLocal 中无用户
             } catch (JwtException e) {
-                // token 签名非法等：静默通过
+                // token 无效时放行给后续鉴权处理
             }
         }
 
         try {
             filterChain.doFilter(request, response);
         } finally {
-            // 请求结束后必须清理 ThreadLocal，防止内存泄漏和数据污染
             currentUser.remove();
+            SecurityContextHolder.clearContext();
         }
     }
 }

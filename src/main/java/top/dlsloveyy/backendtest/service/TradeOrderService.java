@@ -47,8 +47,10 @@ public interface TradeOrderService extends IService<TradeOrder> {
      * 申请退款 (买家操作)
      * @param orderId 订单ID
      * @param buyerId 买家ID (用于权限校验)
+     * @param reason 退款/争议原因
+     * @param buyerEvidence 证据（文本或上传文件URL拼接）
      */
-    ResponseResult<?> applyRefund(Long orderId, Long buyerId);
+    ResponseResult<?> applyRefund(Long orderId, Long buyerId, String reason, String buyerEvidence);
 
     /**
      * 同意退款 (卖家操作)
@@ -63,4 +65,6 @@ public interface TradeOrderService extends IService<TradeOrder> {
      * @param sellerId 卖家ID (用于权限校验)
      */
     ResponseResult<?> rejectRefund(Long orderId, Long sellerId);
+
+    int closeExpiredPendingOrders();
 }

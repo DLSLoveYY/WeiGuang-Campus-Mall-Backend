@@ -69,6 +69,15 @@ public class Goods {
 
     @Column(nullable = false)
     private Boolean isFeatured = false; // 是否为精选/推荐商品 (对应原 featured)
+
+    @Transient
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    private String sellerName;
+
+    @Transient
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    private String sellerAvatar;
+
     @PrePersist
     protected void onCreate() {
         createTime = LocalDateTime.now();

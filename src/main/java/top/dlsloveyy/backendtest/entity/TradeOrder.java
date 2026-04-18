@@ -8,6 +8,8 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+import static top.dlsloveyy.backendtest.constant.OrderStatus.PENDING_PAYMENT;
+
 @Data
 @TableName("trade_order")
 public class TradeOrder {
@@ -39,13 +41,15 @@ public class TradeOrder {
 
     /**
      * 担保交易核心状态机：
-     * 0: 待支付 (买家刚拍下，尚未付款)
-     * 1: 已支付，待发货/待面交 (【核心状态】买家已付款，钱暂存平台，等待卖家发货或联系面交)
-     * 2: 已发货，待收货 (卖家已寄出快递或已赴约，等待买家拿到货品)
-     * 3: 交易成功 (买家在线上点击“确认收货”，平台此时将钱打入卖家余额)
-     * 4: 交易取消/关闭 (未支付前超时取消，或双方协商退款)
+     * 0: 待支付
+     * 1: 已支付待发货
+     * 2: 已发货待收货
+     * 3: 交易成功
+     * 4: 交易关闭
+     * 5: 已退款
+     * 6: 退款申请中
      */
-    private Integer status = 0;
+    private Integer status = PENDING_PAYMENT;
 
     private LocalDateTime createTime; // 下单时间
 

@@ -10,6 +10,10 @@ import top.dlsloveyy.backendtest.service.TradeOrderService;
 import top.dlsloveyy.backendtest.util.JwtUtil;
 import jakarta.servlet.http.HttpServletRequest;
 
+import static top.dlsloveyy.backendtest.constant.OrderStatus.PAID_PENDING_SHIPMENT;
+import static top.dlsloveyy.backendtest.constant.OrderStatus.REFUND_REQUESTED;
+import static top.dlsloveyy.backendtest.constant.OrderStatus.SHIPPED_PENDING_RECEIPT;
+
 @RestController
 @RequestMapping("/api/order")
 public class TradeOrderController {
@@ -100,10 +104,14 @@ public class TradeOrderController {
      * 申请退款 (买家操作)
      */
     @PutMapping("/refund/apply/{id}")
-    public ResponseResult<?> applyRefund(@PathVariable Long id, HttpServletRequest request) {
+    public ResponseResult<?> applyRefund(@PathVariable Long id,
+                                         @RequestBody(required = false) java.util.Map<String, String> payload,
+                                         HttpServletRequest request) {
         Long buyerId = getUserId(request);
         if (buyerId == null) return ResponseResult.error(401, "请先登录");
-        return tradeOrderService.applyRefund(id, buyerId);
+        String reason = payload == null ? null : payload.get("reason");
+        String buyerEvidence = payload == null ? null : payload.get("buyerEvidence");
+        return tradeOrderService.applyRefund(id, buyerId, reason, buyerEvidence);
     }
 
     /**
@@ -136,16 +144,16 @@ public class TradeOrderController {
         Long userId = getUserId(request);
         if (userId == null) return ResponseResult.error(401, "请先登录");
 
-        long sellerCount = tradeOrderService.count(
-            new LambdaQueryWrapper<TradeOrder>()
+        LambdaQueryWrapper<TradeOrder> sellerQuery = new LambdaQueryWrapper<TradeOrder>()
                 .eq(TradeOrder::getSellerId, userId)
-                .in(TradeOrder::getStatus, 1, 6)
-        );
-        long buyerCount = tradeOrderService.count(
-            new LambdaQueryWrapper<TradeOrder>()
+                .in(TradeOrder::getStatus, PAID_PENDING_SHIPMENT, REFUND_REQUESTED);
+        long sellerCount = tradeOrderService.count(sellerQuery);
+
+        LambdaQueryWrapper<TradeOrder> buyerQuery = new LambdaQueryWrapper<TradeOrder>()
                 .eq(TradeOrder::getBuyerId, userId)
-                .eq(TradeOrder::getStatus, 2)
-        );
+                .eq(TradeOrder::getStatus, SHIPPED_PENDING_RECEIPT);
+        long buyerCount = tradeOrderService.count(buyerQuery);
+
         return ResponseResult.success(sellerCount + buyerCount);
     }
 }

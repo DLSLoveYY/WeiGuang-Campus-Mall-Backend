@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import top.dlsloveyy.backendtest.model.dto.ResponseResult;
 
 import java.io.File;
 import java.io.IOException;
@@ -46,9 +47,9 @@ public class UploadController {
     }
 
     @PostMapping("/upload/avatar")
-    public String uploadAvatar(@RequestParam("file") MultipartFile file) {
+    public ResponseResult<?> uploadAvatar(@RequestParam("file") MultipartFile file) {
         if (file.isEmpty()) {
-            return "文件为空";
+            return ResponseResult.error("文件为空");
         }
         String fileName = UUID.randomUUID() + "_" + file.getOriginalFilename();
         String uploadDir = System.getProperty("user.dir") + "/uploads/avatars/";
@@ -59,10 +60,9 @@ public class UploadController {
         File dest = new File(uploadDir + fileName);
         try {
             file.transferTo(dest);
-            return "/uploads/avatars/" + fileName;
+            return ResponseResult.success("上传成功", "/uploads/avatars/" + fileName);
         } catch (IOException e) {
-            e.printStackTrace();
-            return "上传失败";
+            return ResponseResult.error("上传失败：" + e.getMessage());
         }
     }
 
