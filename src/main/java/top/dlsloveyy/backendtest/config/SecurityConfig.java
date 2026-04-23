@@ -37,7 +37,10 @@ public class SecurityConfig {
                                 "/api/user/public-goods/**",
                                 "/api/user/public-followees/**",
                                 "/api/review/seller/**",
-                                "/api/upload/avatar",
+                                "/api/comment/flat",
+                                "/api/comment/list",
+                                "/api/comment/tree",
+                                "/api/upload/**",
                                 "/uploads/**",
                                 "/error"
                         ).permitAll()

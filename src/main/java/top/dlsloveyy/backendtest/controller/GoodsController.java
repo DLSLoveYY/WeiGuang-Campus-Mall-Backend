@@ -58,6 +58,12 @@ public class GoodsController {
             goods.setConditionLevel("成色未知");
         }
 
+        try {
+            normalizeGoodsDeliveryMethods(goods);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("code", 400, "message", e.getMessage()));
+        }
+
         List<String> hits = auditService.findSensitiveHits(goods.getTitle(), goods.getDescription());
         boolean hasSensitive = !hits.isEmpty();
 
@@ -101,6 +107,13 @@ public class GoodsController {
         original.setCategory(updatedGoods.getCategory());
         original.setConditionLevel(updatedGoods.getConditionLevel());
         original.setDeliveryMethod(updatedGoods.getDeliveryMethod());
+        original.setDeliveryMethods(updatedGoods.getDeliveryMethods());
+        original.setTradeAddress(updatedGoods.getTradeAddress());
+        try {
+            normalizeGoodsDeliveryMethods(original);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("code", 400, "message", e.getMessage()));
+        }
         original.setImages(updatedGoods.getImages());
         original.setUpdateTime(LocalDateTime.now());
 
@@ -151,6 +164,8 @@ public class GoodsController {
                         String avatar = seller.getAvatar();
                         g.setSellerAvatar(avatar == null ? "" : avatar);
                     }
+                    // 统一处理历史数据中可能包含的本地域名前缀
+                    normalizeGoodsImages(g);
                 });
             }
         }
@@ -169,6 +184,8 @@ public class GoodsController {
 
         // 计算热度：浏览量*1.2 + 收藏数*4
         List<Map<String, Object>> hotList = allActive.stream().map(g -> {
+            // ✅ 统一处理图片 URL
+            normalizeGoodsImages(g);
             Map<String, Object> map = new HashMap<>();
             map.put("id", g.getId());
             map.put("title", g.getTitle());
@@ -301,5 +318,71 @@ public class GoodsController {
         List<Long> goodsIds = favorites.stream().map(GoodsFavorite::getGoodsId).toList();
         List<Goods> goodsList = goodsMapper.selectBatchIds(goodsIds);
         return ResponseEntity.ok(Map.of("code", 200, "data", goodsList));
+    }
+
+    // ==========================================
+    // 📌 Helper Method: 统一处理图片 URL
+    // ==========================================
+    /**
+     * 将历史数据中硬编码的本地域名前缀移除，统一保留相对路径。
+     */
+    private void normalizeGoodsImages(Goods goods) {
+        if (goods == null || goods.getImages() == null) return;
+        String images = goods.getImages();
+        images = images.replace("http://localhost:8080", "");
+        images = images.replace("https://localhost:8080", "");
+        goods.setImages(images);
+    }
+
+    private void normalizeGoodsDeliveryMethods(Goods goods) {
+        if (goods == null) {
+            return;
+        }
+
+        String raw = goods.getDeliveryMethods();
+        String legacy = goods.getDeliveryMethod();
+        java.util.LinkedHashSet<String> normalized = new java.util.LinkedHashSet<>();
+
+        collectDeliveryMethods(normalized, raw);
+        collectDeliveryMethods(normalized, legacy);
+
+        if (normalized.isEmpty()) {
+            normalized.add("校园面交");
+        }
+
+        if (!normalized.contains("校园面交") && !normalized.contains("邮寄")) {
+            throw new IllegalArgumentException("交易方式仅支持校园面交或邮寄");
+        }
+
+        if (normalized.size() > 2) {
+            throw new IllegalArgumentException("交易方式最多选择两种");
+        }
+
+        String csv = String.join(",", normalized);
+        goods.setDeliveryMethods(csv);
+        goods.setDeliveryMethod(normalized.iterator().next());
+        if (!normalized.contains("校园面交")) {
+            goods.setTradeAddress("");
+        }
+    }
+
+    private void collectDeliveryMethods(java.util.Set<String> holder, String source) {
+        if (source == null || source.isBlank()) {
+            return;
+        }
+        String[] parts = source.split(",");
+        for (String part : parts) {
+            String method = part == null ? "" : part.trim();
+            if (method.isEmpty()) {
+                continue;
+            }
+            if ("自提".equals(method) || "买家自提".equals(method)) {
+                method = "校园面交";
+            }
+            if (!"校园面交".equals(method) && !"邮寄".equals(method)) {
+                throw new IllegalArgumentException("交易方式仅支持校园面交或邮寄");
+            }
+            holder.add(method);
+        }
     }
 }

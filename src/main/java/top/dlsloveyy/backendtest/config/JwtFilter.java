@@ -66,12 +66,15 @@ public class JwtFilter extends OncePerRequestFilter {
                     }
                 }
             } catch (ExpiredJwtException ex) {
-                Object tokenType = ex.getClaims().get("tokenType");
-                if ("access".equals(tokenType)) {
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    response.setContentType("application/json;charset=UTF-8");
-                    response.getWriter().write("{\"code\":401,\"message\":\"AccessToken已过期，请刷新\"}");
-                    return;
+                Claims claims = ex.getClaims();
+                if (claims != null) {
+                    Object tokenType = claims.get("tokenType");
+                    if ("access".equals(tokenType)) {
+                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                        response.setContentType("application/json;charset=UTF-8");
+                        response.getWriter().write("{\"code\":401,\"message\":\"AccessToken已过期，请刷新\"}");
+                        return;
+                    }
                 }
             } catch (JwtException e) {
                 // token 无效时放行给后续鉴权处理

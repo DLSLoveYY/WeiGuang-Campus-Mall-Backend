@@ -10,14 +10,15 @@ import top.dlsloveyy.backendtest.entity.CustomerServiceCaseAction;
 import top.dlsloveyy.backendtest.mapper.CustomerServiceCaseActionMapper;
 import top.dlsloveyy.backendtest.mapper.CustomerServiceCaseMapper;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
+import top.dlsloveyy.backendtest.service.AccountService;
 import top.dlsloveyy.backendtest.service.CustomerServiceCaseService;
 import top.dlsloveyy.backendtest.service.OperationAuditLogService;
 import top.dlsloveyy.backendtest.entity.TradeDispute;
 import top.dlsloveyy.backendtest.entity.TradeOrder;
 import top.dlsloveyy.backendtest.mapper.TradeDisputeMapper;
 import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
-import top.dlsloveyy.backendtest.service.UserService;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -48,7 +49,7 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
     private TradeOrderMapper tradeOrderMapper;
 
     @Autowired
-    private UserService userService;
+    private AccountService accountService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -206,7 +207,27 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
             order.setStatus(top.dlsloveyy.backendtest.constant.OrderStatus.REFUNDED);
             order.setUpdateTime(LocalDateTime.now());
             tradeOrderMapper.updateById(order);
-            userService.increaseBalance(order.getBuyerId(), order.getOrderPrice());
+
+            BigDecimal escrowAmount = resolveEscrowAmount(order);
+            if (escrowAmount.compareTo(BigDecimal.ZERO) > 0) {
+                accountService.unfreeze(
+                        order.getSellerId(),
+                        escrowAmount,
+                        "CS_CASE_REFUND_UNFREEZE",
+                        String.valueOf(order.getId()),
+                        "CS_CASE_REFUND_UNFREEZE:" + order.getId() + ":" + order.getSellerId(),
+                        "客服裁决退款，释放卖家待结算金额"
+                );
+            }
+
+            accountService.credit(
+                    order.getBuyerId(),
+                    order.getOrderPrice(),
+                    "CS_CASE_REFUND",
+                    String.valueOf(order.getId()),
+                    "CS_CASE_REFUND:IN:" + order.getId() + ":" + order.getBuyerId(),
+                    "客服裁决买家胜，退款入账"
+            );
         } else {
             order.setStatus(top.dlsloveyy.backendtest.constant.OrderStatus.SHIPPED_PENDING_RECEIPT);
             order.setUpdateTime(LocalDateTime.now());
@@ -302,5 +323,15 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
         action.setAttachments(attachments);
         action.setCreateTime(LocalDateTime.now());
         caseActionMapper.insert(action);
+    }
+
+    private BigDecimal resolveEscrowAmount(TradeOrder order) {
+        if (order.getSellerIncome() != null && order.getSellerIncome().compareTo(BigDecimal.ZERO) > 0) {
+            return order.getSellerIncome();
+        }
+        if (order.getOrderPrice() != null && order.getOrderPrice().compareTo(BigDecimal.ZERO) > 0) {
+            return order.getOrderPrice();
+        }
+        return BigDecimal.ZERO;
     }
 }

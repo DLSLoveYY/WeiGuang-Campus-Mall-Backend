@@ -138,8 +138,8 @@ public class FollowController {
         List<Map<String, Object>> result = new ArrayList<>();
         for (User u : users) {
             String avatar = u.getAvatar();
-            if (avatar != null && !avatar.startsWith("http")) {
-                avatar = "http://localhost:8080" + avatar;
+            if (avatar != null && !avatar.isBlank() && !avatar.startsWith("http") && !avatar.startsWith("/")) {
+                avatar = "/" + avatar;
             }
             Map<String, Object> map = new HashMap<>();
             map.put("id", u.getId());

@@ -10,7 +10,13 @@ public class OrderCreateDTO {
     private Long goodsId;
 
     @NotNull(message = "请选择交易方式")
-    private String deliveryMethod; // 自提 / 校园面交 / 邮寄
+    private String deliveryMethod; // 校园面交 / 邮寄
 
     private String deliveryAddress;
+
+    private Long addressId;
+
+    private String meetupAddress;
+
+    private String meetupPhone;
 }

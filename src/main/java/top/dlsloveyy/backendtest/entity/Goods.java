@@ -50,7 +50,13 @@ public class Goods {
     private Integer status = 0; // 商品状态：0-待审核, 1-出售中, 2-已预订, 3-已售出, 4-已下架
 
     @Column(length = 50)
-    private String deliveryMethod; // 交货方式 (如：食堂面交、宿舍楼下自提、快递)
+    private String deliveryMethod; // 主交货方式（兼容字段）
+
+    @Column(name = "delivery_methods", length = 100)
+    private String deliveryMethods; // 允许交货方式（CSV：校园面交,邮寄）
+
+    @Column(length = 255)
+    private String tradeAddress; // 卖家提供的交易地址（校园面交时使用）
 
     @Column(nullable = false)
     private Integer viewCount = 0; // 浏览量

@@ -82,10 +82,15 @@ public class TradeOrderController {
      * 确认发货 (卖家操作)
      */
     @PutMapping("/ship/{id}")
-    public ResponseResult<?> shipOrder(@PathVariable Long id, HttpServletRequest request) {
+    public ResponseResult<?> shipOrder(@PathVariable Long id,
+                                       @RequestBody(required = false) java.util.Map<String, String> payload,
+                                       HttpServletRequest request) {
         Long sellerId = getUserId(request);
         if (sellerId == null) return ResponseResult.error(401, "请先登录");
-        return tradeOrderService.shipOrder(id, sellerId);
+        String carrierCode = payload == null ? null : payload.get("carrierCode");
+        String trackingNo = payload == null ? null : payload.get("trackingNo");
+        String buyerPhoneSuffix = payload == null ? null : payload.get("buyerPhoneSuffix");
+        return tradeOrderService.shipOrder(id, sellerId, carrierCode, trackingNo, buyerPhoneSuffix);
     }
 
     /**
@@ -105,40 +110,121 @@ public class TradeOrderController {
      */
     @PutMapping("/refund/apply/{id}")
     public ResponseResult<?> applyRefund(@PathVariable Long id,
-                                         @RequestBody(required = false) java.util.Map<String, String> payload,
+                                         @RequestBody(required = false) java.util.Map<String, Object> payload,
                                          HttpServletRequest request) {
         Long buyerId = getUserId(request);
         if (buyerId == null) return ResponseResult.error(401, "请先登录");
-        String reason = payload == null ? null : payload.get("reason");
-        String buyerEvidence = payload == null ? null : payload.get("buyerEvidence");
-        return tradeOrderService.applyRefund(id, buyerId, reason, buyerEvidence);
+        String reason = payload == null ? null : (String) payload.get("reason");
+        String reasonCode = payload == null ? null : (String) payload.get("reasonCode");
+        String reasonDetail = payload == null ? null : (String) payload.get("reasonDetail");
+        String buyerEvidence = payload == null ? null : (String) payload.get("buyerEvidence");
+
+        Integer refundType = 1;
+        if (payload != null && payload.get("refundType") != null) {
+            Object typeObj = payload.get("refundType");
+            if (typeObj instanceof Number number) {
+                refundType = number.intValue();
+            } else {
+                refundType = Integer.parseInt(String.valueOf(typeObj));
+            }
+        }
+
+        java.math.BigDecimal requestedAmount = null;
+        if (payload != null && payload.get("requestedAmount") != null) {
+            Object amountObj = payload.get("requestedAmount");
+            if (amountObj instanceof Number number) {
+                requestedAmount = java.math.BigDecimal.valueOf(number.doubleValue());
+            } else {
+                requestedAmount = new java.math.BigDecimal(String.valueOf(amountObj));
+            }
+        }
+        return tradeOrderService.applyRefund(id, buyerId, refundType, requestedAmount, reason, reasonCode, reasonDetail, buyerEvidence);
     }
+
 
     /**
      * 同意退款 (卖家操作)
      */
     @PutMapping("/refund/approve/{id}")
-    public ResponseResult<?> approveRefund(@PathVariable Long id, HttpServletRequest request) {
+    public ResponseResult<?> approveRefund(@PathVariable Long id,
+                                           @RequestBody(required = false) java.util.Map<String, Object> payload,
+                                           HttpServletRequest request) {
         Long sellerId = getUserId(request);
         if (sellerId == null) return ResponseResult.error(401, "请先登录");
-        return tradeOrderService.approveRefund(id, sellerId);
+        java.math.BigDecimal approvedAmount = null;
+        if (payload != null && payload.get("approvedAmount") != null) {
+            Object amountObj = payload.get("approvedAmount");
+            if (amountObj instanceof Number number) {
+                approvedAmount = java.math.BigDecimal.valueOf(number.doubleValue());
+            } else {
+                approvedAmount = new java.math.BigDecimal(String.valueOf(amountObj));
+            }
+        }
+        return tradeOrderService.approveRefund(id, sellerId, approvedAmount);
     }
 
-    /**
-     * 拒绝退款 (卖家操作)
-     */
-    @PutMapping("/refund/reject/{id}")
-    public ResponseResult<?> rejectRefund(@PathVariable Long id, HttpServletRequest request) {
+
+    @PutMapping("/refund/return-tracking/{id}")
+    public ResponseResult<?> submitReturnTracking(@PathVariable Long id,
+                                                   @RequestBody java.util.Map<String, String> payload,
+                                                   HttpServletRequest request) {
+        Long buyerId = getUserId(request);
+        if (buyerId == null) return ResponseResult.error(401, "请先登录");
+        String returnTrackingNo = payload == null ? null : payload.get("returnTrackingNo");
+        return tradeOrderService.submitReturnTracking(id, buyerId, returnTrackingNo);
+    }
+
+    @PutMapping("/refund/confirm-return/{id}")
+    public ResponseResult<?> confirmReturnReceived(@PathVariable Long id,
+                                                   @RequestBody(required = false) java.util.Map<String, Object> payload,
+                                                   HttpServletRequest request) {
         Long sellerId = getUserId(request);
         if (sellerId == null) return ResponseResult.error(401, "请先登录");
-        return tradeOrderService.rejectRefund(id, sellerId);
+        java.math.BigDecimal approvedAmount = null;
+        if (payload != null && payload.get("approvedAmount") != null) {
+            Object amountObj = payload.get("approvedAmount");
+            if (amountObj instanceof Number number) {
+                approvedAmount = java.math.BigDecimal.valueOf(number.doubleValue());
+            } else {
+                approvedAmount = new java.math.BigDecimal(String.valueOf(amountObj));
+            }
+        }
+        return tradeOrderService.confirmReturnReceived(id, sellerId, approvedAmount);
     }
 
-    /**
-     * 获取当前用户需要处理的订单通知数量
-     * 卖家：待发货(1) + 退款申请中(6)
-     * 买家：已发货待收货(2)
-     */
+
+    @PutMapping("/cancel/{id}")
+    public ResponseResult<?> cancelOrderByBuyer(@PathVariable Long id,
+                                                 @RequestBody(required = false) java.util.Map<String, String> payload,
+                                                 HttpServletRequest request) {
+        Long buyerId = getUserId(request);
+        if (buyerId == null) return ResponseResult.error(401, "请先登录");
+        String reason = payload == null ? null : payload.get("reason");
+        return tradeOrderService.cancelOrderByBuyer(id, buyerId, reason);
+    }
+
+    @GetMapping("/logistics/{id}")
+    public ResponseResult<?> getLogisticsTrace(@PathVariable Long id, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return ResponseResult.error(401, "请先登录");
+        return tradeOrderService.getLogisticsTrace(id, userId);
+    }
+
+    @GetMapping("/carriers")
+    public ResponseResult<?> listCarriers() {
+        java.util.List<java.util.Map<String, String>> carriers = java.util.List.of(
+                java.util.Map.of("code", "SF", "name", "顺丰速运"),
+                java.util.Map.of("code", "JD", "name", "京东物流"),
+                java.util.Map.of("code", "EMS", "name", "中国邮政EMS"),
+                java.util.Map.of("code", "ZTO", "name", "中通快递"),
+                java.util.Map.of("code", "YTO", "name", "圆通速递"),
+                java.util.Map.of("code", "STO", "name", "申通快递"),
+                java.util.Map.of("code", "YUNDA", "name", "韵达速递"),
+                java.util.Map.of("code", "DEPPON", "name", "德邦快递")
+        );
+        return ResponseResult.success(carriers);
+    }
+
     @GetMapping("/notify-count")
     public ResponseResult<?> getNotifyCount(HttpServletRequest request) {
         Long userId = getUserId(request);

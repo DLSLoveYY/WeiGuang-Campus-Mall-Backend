@@ -6,6 +6,7 @@ import top.dlsloveyy.backendtest.model.dto.OrderCreateDTO;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
 import top.dlsloveyy.backendtest.model.vo.TradeOrderVO;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 public interface TradeOrderService extends IService<TradeOrder> {
@@ -34,7 +35,7 @@ public interface TradeOrderService extends IService<TradeOrder> {
     /**
      * 确认发货
      */
-    ResponseResult<?> shipOrder(Long orderId, Long sellerId);
+    ResponseResult<?> shipOrder(Long orderId, Long sellerId, String carrierCode, String trackingNo, String buyerPhoneSuffix);
 
     /**
      * 确认收货 (结算金额给卖家)
@@ -50,14 +51,21 @@ public interface TradeOrderService extends IService<TradeOrder> {
      * @param reason 退款/争议原因
      * @param buyerEvidence 证据（文本或上传文件URL拼接）
      */
-    ResponseResult<?> applyRefund(Long orderId, Long buyerId, String reason, String buyerEvidence);
+    ResponseResult<?> applyRefund(Long orderId,
+                                  Long buyerId,
+                                  Integer refundType,
+                                  BigDecimal requestedAmount,
+                                  String reason,
+                                  String reasonCode,
+                                  String reasonDetail,
+                                  String buyerEvidence);
 
     /**
      * 同意退款 (卖家操作)
      * @param orderId 订单ID
      * @param sellerId 卖家ID (用于权限校验)
      */
-    ResponseResult<?> approveRefund(Long orderId, Long sellerId);
+    ResponseResult<?> approveRefund(Long orderId, Long sellerId, BigDecimal approvedAmount);
 
     /**
      * 拒绝退款 (卖家操作)
@@ -65,6 +73,14 @@ public interface TradeOrderService extends IService<TradeOrder> {
      * @param sellerId 卖家ID (用于权限校验)
      */
     ResponseResult<?> rejectRefund(Long orderId, Long sellerId);
+
+    ResponseResult<?> submitReturnTracking(Long orderId, Long buyerId, String returnTrackingNo);
+
+    ResponseResult<?> confirmReturnReceived(Long orderId, Long sellerId, BigDecimal approvedAmount);
+
+    ResponseResult<?> cancelOrderByBuyer(Long orderId, Long buyerId, String reason);
+
+    ResponseResult<?> getLogisticsTrace(Long orderId, Long userId);
 
     int closeExpiredPendingOrders();
 }

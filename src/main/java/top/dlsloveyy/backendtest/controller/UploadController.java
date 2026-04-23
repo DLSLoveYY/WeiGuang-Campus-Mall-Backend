@@ -2,13 +2,14 @@ package top.dlsloveyy.backendtest.controller;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
-import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Map;
 import java.util.UUID;
 
@@ -16,8 +17,11 @@ import java.util.UUID;
 @RequestMapping("/api")
 public class UploadController {
 
-    @Value("${upload.dir:uploads}")
-    private String uploadDir;
+    private final Path uploadRoot;
+
+    public UploadController(@Value("${upload.dir:uploads}") String uploadDir) {
+        this.uploadRoot = resolveUploadRoot(uploadDir);
+    }
 
     @PostMapping("/upload")
     public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) {
@@ -26,18 +30,9 @@ public class UploadController {
                 return ResponseEntity.badRequest().body(Map.of("error", "文件为空"));
             }
 
-            String uploadPath = System.getProperty("user.dir") + File.separator + "uploads";
-            File folder = new File(uploadPath);
-            if (!folder.exists()) {
-                folder.mkdirs();
-            }
-
-            String originalFilename = file.getOriginalFilename();
-            String extension = originalFilename.substring(originalFilename.lastIndexOf('.') + 1);
-            String newFileName = UUID.randomUUID() + "." + extension;
-
-            File dest = new File(folder, newFileName);
-            file.transferTo(dest);
+            String newFileName = UUID.randomUUID() + getSafeExtension(file.getOriginalFilename());
+            Path destination = uploadRoot.resolve(newFileName).normalize();
+            file.transferTo(destination);
 
             return ResponseEntity.ok(Map.of("url", "/uploads/" + newFileName));
 
@@ -51,20 +46,47 @@ public class UploadController {
         if (file.isEmpty()) {
             return ResponseResult.error("文件为空");
         }
-        String fileName = UUID.randomUUID() + "_" + file.getOriginalFilename();
-        String uploadDir = System.getProperty("user.dir") + "/uploads/avatars/";
-
-        File dir = new File(uploadDir);
-        if (!dir.exists()) dir.mkdirs();
-
-        File dest = new File(uploadDir + fileName);
         try {
-            file.transferTo(dest);
+            Path avatarDir = uploadRoot.resolve("avatars");
+            Files.createDirectories(avatarDir);
+            String fileName = "avatar_" + UUID.randomUUID() + getSafeExtension(file.getOriginalFilename());
+            Path destination = avatarDir.resolve(fileName).normalize();
+            file.transferTo(destination);
             return ResponseResult.success("上传成功", "/uploads/avatars/" + fileName);
         } catch (IOException e) {
             return ResponseResult.error("上传失败：" + e.getMessage());
         }
     }
 
+    private static String getSafeExtension(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "";
+        }
+        int dotIndex = originalFilename.lastIndexOf('.');
+        if (dotIndex < 0 || dotIndex == originalFilename.length() - 1) {
+            return "";
+        }
+        return originalFilename.substring(dotIndex);
+    }
+
+    private static Path resolveUploadRoot(String uploadDir) {
+        Path configuredPath = Paths.get(uploadDir).normalize();
+        if (!configuredPath.isAbsolute()) {
+            Path workingDir = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
+            if (!"backend-main".equalsIgnoreCase(workingDir.getFileName().toString())) {
+                Path backendMainDir = workingDir.resolve("backend-main");
+                if (Files.isDirectory(backendMainDir)) {
+                    workingDir = backendMainDir;
+                }
+            }
+            configuredPath = workingDir.resolve(configuredPath).normalize();
+        }
+        try {
+            Files.createDirectories(configuredPath);
+        } catch (IOException e) {
+            throw new IllegalStateException("无法创建上传目录: " + configuredPath, e);
+        }
+        return configuredPath;
+    }
 
 }

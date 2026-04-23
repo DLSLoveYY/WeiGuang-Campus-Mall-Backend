@@ -39,8 +39,23 @@ public class ChatController {
     public void sendMessage(@Payload Map<String, Object> payload, Principal principal) {
         if (principal == null) return;
 
-        Long senderId = Long.valueOf(principal.getName());
-        Long receiverId = Long.valueOf(payload.get("receiverId").toString());
+        Long senderId = resolveSenderId(principal);
+        if (senderId == null) {
+            return;
+        }
+
+        Object receiverIdObj = payload.get("receiverId");
+        if (receiverIdObj == null) {
+            return;
+        }
+
+        Long receiverId;
+        try {
+            receiverId = Long.valueOf(receiverIdObj.toString());
+        } catch (NumberFormatException e) {
+            return;
+        }
+
         String content = payload.getOrDefault("content", "").toString().trim();
         if (content.isEmpty()) return;
 
@@ -68,6 +83,19 @@ public class ChatController {
         messagingTemplate.convertAndSendToUser(String.valueOf(receiverId), "/queue/messages", pushData);
         // 同时推送给发送方（让自己的界面也实时显示）
         messagingTemplate.convertAndSendToUser(String.valueOf(senderId), "/queue/messages", pushData);
+    }
+
+    private Long resolveSenderId(Principal principal) {
+        if (principal == null) {
+            return null;
+        }
+
+        try {
+            return Long.valueOf(principal.getName());
+        } catch (NumberFormatException ignored) {
+            User currentUser = JwtFilter.currentUser.get();
+            return currentUser != null ? currentUser.getId() : null;
+        }
     }
 
     /**

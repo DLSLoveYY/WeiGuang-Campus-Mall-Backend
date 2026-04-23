@@ -10,11 +10,12 @@ import top.dlsloveyy.backendtest.entity.TradeOrder;
 import top.dlsloveyy.backendtest.mapper.TradeDisputeMapper;
 import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
+import top.dlsloveyy.backendtest.service.AccountService;
 import top.dlsloveyy.backendtest.service.CustomerServiceCaseService;
 import top.dlsloveyy.backendtest.service.OperationAuditLogService;
 import top.dlsloveyy.backendtest.service.TradeDisputeService;
-import top.dlsloveyy.backendtest.service.UserService;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -34,7 +35,7 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
     private TradeOrderMapper tradeOrderMapper;
 
     @Autowired
-    private UserService userService;
+    private AccountService accountService;
 
     @Autowired
     private OperationAuditLogService operationAuditLogService;
@@ -177,7 +178,27 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
             order.setStatus(REFUNDED);
             order.setUpdateTime(LocalDateTime.now());
             tradeOrderMapper.updateById(order);
-            userService.increaseBalance(order.getBuyerId(), order.getOrderPrice());
+
+            BigDecimal escrowAmount = resolveEscrowAmount(order);
+            if (escrowAmount.compareTo(BigDecimal.ZERO) > 0) {
+                accountService.unfreeze(
+                        order.getSellerId(),
+                        escrowAmount,
+                        "DISPUTE_REFUND_UNFREEZE",
+                        String.valueOf(order.getId()),
+                        "DISPUTE_REFUND_UNFREEZE:" + order.getId() + ":" + order.getSellerId(),
+                        "争议裁决退款，释放卖家待结算金额"
+                );
+            }
+
+            accountService.credit(
+                    order.getBuyerId(),
+                    order.getOrderPrice(),
+                    "DISPUTE_REFUND",
+                    String.valueOf(order.getId()),
+                    "DISPUTE_REFUND:IN:" + order.getId() + ":" + order.getBuyerId(),
+                    "争议裁决买家胜，退款入账"
+            );
         } else {
             order.setStatus(SHIPPED_PENDING_RECEIPT);
             order.setUpdateTime(LocalDateTime.now());
@@ -278,5 +299,15 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
         }
         query.orderByDesc(TradeDispute::getCreateTime);
         return ResponseResult.success(this.list(query));
+    }
+
+    private BigDecimal resolveEscrowAmount(TradeOrder order) {
+        if (order.getSellerIncome() != null && order.getSellerIncome().compareTo(BigDecimal.ZERO) > 0) {
+            return order.getSellerIncome();
+        }
+        if (order.getOrderPrice() != null && order.getOrderPrice().compareTo(BigDecimal.ZERO) > 0) {
+            return order.getOrderPrice();
+        }
+        return BigDecimal.ZERO;
     }
 }

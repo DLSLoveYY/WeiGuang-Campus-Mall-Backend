@@ -105,10 +105,14 @@ public class CheckPostController {
 
         User author = userMapper.selectById(goods.getSellerId());
         if (author != null) {
+            String avatar = author.getAvatar();
+            if (avatar != null && !avatar.isBlank() && !avatar.startsWith("http") && !avatar.startsWith("/")) {
+                avatar = "/" + avatar;
+            }
             result.put("author", Map.of(
                     "id", author.getId(),
                     "username", author.getUsername(),
-                    "avatar", author.getAvatar() == null ? "" : (author.getAvatar().startsWith("http") ? author.getAvatar() : "http://localhost:8080" + author.getAvatar())
+                    "avatar", avatar == null ? "" : avatar
             ));
         } else {
             result.put("author", Map.of("id", -1, "username", "未知", "avatar", ""));

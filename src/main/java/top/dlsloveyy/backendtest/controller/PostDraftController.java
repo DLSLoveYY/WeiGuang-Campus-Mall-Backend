@@ -3,7 +3,6 @@ package top.dlsloveyy.backendtest.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -14,6 +13,7 @@ import top.dlsloveyy.backendtest.mapper.UserMapper;
 import top.dlsloveyy.backendtest.util.JwtUtil;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -22,14 +22,11 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class PostDraftController {
 
-    @Autowired
-    private GoodsDraftMapper goodsDraftMapper;
+    private final GoodsDraftMapper goodsDraftMapper;
 
-    @Autowired
-    private UserMapper userMapper;
+    private final UserMapper userMapper;
 
-    @Autowired
-    private JwtUtil jwtUtil;
+    private final JwtUtil jwtUtil;
 
     // ✅ 保存商品草稿
     @PostMapping("/save")
@@ -97,7 +94,11 @@ public class PostDraftController {
         );
 
         if (drafts.isEmpty()) {
-            return ResponseEntity.ok(Map.of("code", 0, "message", "无草稿", "data", null));
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", 0);
+            response.put("message", "无草稿");
+            response.put("data", null);
+            return ResponseEntity.ok(response);
         }
 
         GoodsDraft latest = drafts.get(0);

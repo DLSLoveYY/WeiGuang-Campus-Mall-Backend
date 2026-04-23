@@ -217,6 +217,13 @@ public class AdminController {
         if (payload.getCategory() != null) goods.setCategory(payload.getCategory());
         if (payload.getConditionLevel() != null) goods.setConditionLevel(payload.getConditionLevel());
         if (payload.getDeliveryMethod() != null) goods.setDeliveryMethod(payload.getDeliveryMethod());
+        if (payload.getDeliveryMethods() != null || payload.getDeliveryMethod() != null) {
+            try {
+                normalizeGoodsDeliveryMethods(goods);
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of("code", 400, "message", e.getMessage()));
+            }
+        }
         if (payload.getImages() != null) goods.setImages(payload.getImages());
         if (payload.getStatus() != null) goods.setStatus(payload.getStatus());
         goods.setUpdateTime(LocalDateTime.now());
@@ -340,6 +347,7 @@ public class AdminController {
     }
 
     @PostMapping("/checkGoods/approve")
+    @Transactional(rollbackFor = Exception.class)
     public ResponseEntity<?> approveCheckGoods(@RequestBody Map<String, Long> payload,
                                                @RequestHeader("Authorization") String authHeader) {
         if (requireAdmin(authHeader) == null) {
@@ -400,6 +408,53 @@ public class AdminController {
         sysNoticeMapper.insert(notice);
 
         return ResponseEntity.ok(Map.of("code", 200, "message", "公告发布成功"));
+    }
+
+    private void normalizeGoodsDeliveryMethods(Goods goods) {
+        if (goods == null) {
+            return;
+        }
+
+        String raw = goods.getDeliveryMethods();
+        String legacy = goods.getDeliveryMethod();
+        java.util.LinkedHashSet<String> normalized = new java.util.LinkedHashSet<>();
+        collectDeliveryMethods(normalized, raw);
+        collectDeliveryMethods(normalized, legacy);
+
+        if (normalized.isEmpty()) {
+            normalized.add("校园面交");
+        }
+
+        if (normalized.size() > 2) {
+            throw new IllegalArgumentException("交易方式最多选择两种");
+        }
+
+        String csv = String.join(",", normalized);
+        goods.setDeliveryMethods(csv);
+        goods.setDeliveryMethod(normalized.iterator().next());
+        if (!normalized.contains("校园面交")) {
+            goods.setTradeAddress("");
+        }
+    }
+
+    private void collectDeliveryMethods(java.util.Set<String> holder, String source) {
+        if (source == null || source.isBlank()) {
+            return;
+        }
+        String[] parts = source.split(",");
+        for (String part : parts) {
+            String method = part == null ? "" : part.trim();
+            if (method.isEmpty()) {
+                continue;
+            }
+            if ("自提".equals(method) || "买家自提".equals(method)) {
+                method = "校园面交";
+            }
+            if (!"校园面交".equals(method) && !"邮寄".equals(method)) {
+                throw new IllegalArgumentException("交易方式仅支持校园面交或邮寄");
+            }
+            holder.add(method);
+        }
     }
 
     private ResponseEntity<?> changeUserEnabled(String username, boolean enabled, String authHeader) {

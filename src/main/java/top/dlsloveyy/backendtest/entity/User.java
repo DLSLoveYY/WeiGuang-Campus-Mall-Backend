@@ -60,7 +60,11 @@ public class User {
     @Column(name = "credit_score", nullable = false)
     private Integer creditScore = 100; // 默认信用分 100。未来可以做成：被举报/爽约扣分，交易成功加分
 
-    // 账户余额（用于模拟充值、支付、平台放款后的资金提现）
+    // 账户余额（可用余额）
     @Column(nullable = false)
     private BigDecimal balance = BigDecimal.ZERO;
+
+    // 冻结余额（用于担保交易、提现处理中等场景）
+    @Column(nullable = false)
+    private BigDecimal frozenBalance = BigDecimal.ZERO;
 }

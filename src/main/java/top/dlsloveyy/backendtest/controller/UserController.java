@@ -14,6 +14,7 @@ import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.mapper.FollowMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
+import top.dlsloveyy.backendtest.service.AccountService;
 import top.dlsloveyy.backendtest.service.UserService;
 import top.dlsloveyy.backendtest.util.JwtUtil;
 
@@ -46,6 +47,8 @@ public class UserController {
     private RedisTemplate<String, Object> redisTemplate;
 
     private final UserService userService;
+
+    private final AccountService accountService;
 
     // ✅ 登录接口（5次/分钟 IP 限流，防暴力破解）
     @RateLimit(max = 5, window = 60)
@@ -99,7 +102,7 @@ public class UserController {
         }
 
         if (user.getAvatar() == null || user.getAvatar().trim().isEmpty()) {
-            user.setAvatar("/default-avatar.png");
+            user.setAvatar("/uploads/default-avatar.png");
         }
 
         user.setIsAdmin(false);
@@ -139,6 +142,7 @@ public class UserController {
         result.put("dormBuilding", user.getDormBuilding());
         result.put("creditScore", user.getCreditScore());
         result.put("balance", user.getBalance()); // 这里直接返回 BigDecimal 对象，JSON 序列化会自动处理
+        result.put("frozenBalance", user.getFrozenBalance());
 
         return ResponseEntity.ok(result);
     }
@@ -357,6 +361,7 @@ public class UserController {
         safeUser.setDormBuilding(user.getDormBuilding());
         safeUser.setCreditScore(user.getCreditScore());
         safeUser.setBalance(user.getBalance());
+        safeUser.setFrozenBalance(user.getFrozenBalance());
 
         return ResponseEntity.ok(safeUser);
     }
@@ -394,7 +399,14 @@ public class UserController {
                 return ResponseEntity.badRequest().body(Map.of("code", 400, "message", "充值金额必须大于0"));
             }
 
-            userService.increaseBalance(user.getId(), amount);
+            accountService.credit(
+                    user.getId(),
+                    amount,
+                    "USER_RECHARGE",
+                    String.valueOf(System.currentTimeMillis()),
+                    "USER_RECHARGE:IN:" + user.getId() + ":" + System.currentTimeMillis(),
+                    "用户充值"
+            );
 
             return ResponseEntity.ok(Map.of("code", 200, "message", "充值成功"));
         } catch (Exception e) {
@@ -415,8 +427,14 @@ public class UserController {
                 return ResponseEntity.badRequest().body(Map.of("code", 400, "message", "提现金额必须大于0"));
             }
 
-            // 调用扣减余额方法 (里面自带了余额不足的校验)
-            userService.decreaseBalance(user.getId(), amount);
+            accountService.debit(
+                    user.getId(),
+                    amount,
+                    "USER_WITHDRAW",
+                    String.valueOf(System.currentTimeMillis()),
+                    "USER_WITHDRAW:OUT:" + user.getId() + ":" + System.currentTimeMillis(),
+                    "用户提现"
+            );
 
             return ResponseEntity.ok(Map.of("code", 200, "message", "提现申请已提交，预计24小时内到账微信/支付宝"));
         } catch (Exception e) {
