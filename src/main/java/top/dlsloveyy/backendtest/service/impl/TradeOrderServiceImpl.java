@@ -31,6 +31,7 @@ import top.dlsloveyy.backendtest.service.OperationAuditLogService;
 import top.dlsloveyy.backendtest.service.TradeDisputeService;
 import top.dlsloveyy.backendtest.service.TradeOrderService;
 import top.dlsloveyy.backendtest.service.UserService;
+import top.dlsloveyy.backendtest.service.UserNotificationService;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -90,6 +91,9 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
     private TradeDisputeService tradeDisputeService;
 
     @Autowired
+    private UserNotificationService userNotificationService;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
     private static final BigDecimal PLATFORM_FEE_RATE = new BigDecimal("0.05");
@@ -116,7 +120,7 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             if (goods == null) {
                 return ResponseResult.error("商品不存在！");
             }
-            if (goods.getStock() <= 0) {
+            if (goods.getStock() == null || goods.getStock() <= 0) {
                 return ResponseResult.error("手慢了，该商品已售罄！");
             }
             if (goods.getStatus() != 1) {
@@ -201,8 +205,17 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                     "goodsId=" + goodsId + ", status=" + PENDING_PAYMENT + ", freightFee=" + freightFee
             );
 
-            goods.setStock(goods.getStock() - 1);
-            if (goods.getStock() == 0) {
+                userNotificationService.notifyUser(
+                    order.getSellerId(),
+                    "ORDER_CREATED",
+                    "您有一笔新订单",
+                    "商品《" + goods.getTitle() + "》已被下单，当前等待买家支付。",
+                    "TRADE_ORDER",
+                    order.getId());
+
+            int newStock = (goods.getStock() == null ? 0 : goods.getStock() - 1);
+            goods.setStock(newStock);
+            if (newStock <= 0) {
                 goods.setStatus(3);
             }
             goodsMapper.updateById(goods);
@@ -283,6 +296,21 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         order.setUpdateTime(LocalDateTime.now());
         this.updateById(order);
 
+        userNotificationService.notifyUser(
+            order.getSellerId(),
+            "ORDER_PAID",
+            "买家已完成支付",
+            "订单 " + order.getOrderNo() + " 已支付，请尽快发货。",
+            "TRADE_ORDER",
+            orderId);
+        userNotificationService.notifyUser(
+            order.getBuyerId(),
+            "ORDER_PAID",
+            "支付成功",
+            "您的订单已支付成功，等待卖家发货。",
+            "TRADE_ORDER",
+            orderId);
+
         accountService.freeze(
             order.getSellerId(),
             escrowAmount,
@@ -344,6 +372,13 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                     String.valueOf(orderId),
                     "status=" + SHIPPED_PENDING_RECEIPT + ", meetupAddress=" + (order.getMeetupAddress() == null ? "" : order.getMeetupAddress())
             );
+                userNotificationService.notifyUser(
+                    order.getBuyerId(),
+                    "ORDER_SHIPPED",
+                    "卖家已确认面交",
+                    "您的订单已完成面交确认。",
+                    "TRADE_ORDER",
+                    orderId);
             return ResponseResult.success("面交确认成功");
         }
 
@@ -389,6 +424,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         trace.setTraceTime(now);
         trace.setCreateTime(now);
         tradeLogisticsTraceMapper.insert(trace);
+
+        userNotificationService.notifyUser(
+            order.getBuyerId(),
+            "ORDER_SHIPPED",
+            "卖家已发货",
+            "您的订单已发货，请注意查看物流信息。",
+            "TRADE_ORDER",
+            orderId);
 
         operationAuditLogService.log(
                 sellerId,
@@ -452,6 +495,21 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                 String.valueOf(orderId),
                 "status=" + COMPLETED
         );
+
+        userNotificationService.notifyUser(
+            order.getSellerId(),
+            "ORDER_COMPLETED",
+            "买家已确认收货",
+            "订单已完成，资金即将结算给卖家。",
+            "TRADE_ORDER",
+            orderId);
+        userNotificationService.notifyUser(
+            order.getBuyerId(),
+            "ORDER_COMPLETED",
+            "交易完成",
+            "感谢您的交易，欢迎对卖家进行评价。",
+            "TRADE_ORDER",
+            orderId);
 
         return ResponseResult.success("交易完成，钱款已汇入卖家账户！");
     }
@@ -527,6 +585,21 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             restoreGoodsStock(order.getGoodsId());
             executeRefund(order, normalizedRequestedAmount, "ORDER_REFUND_DIRECT", "发货前仅退款");
 
+            userNotificationService.notifyUser(
+                order.getSellerId(),
+                "REFUND_APPLIED",
+                "买家申请退款",
+                "订单已进入退款处理，请尽快查看。",
+                "TRADE_ORDER",
+                orderId);
+            userNotificationService.notifyUser(
+                order.getBuyerId(),
+                "REFUND_DIRECT_DONE",
+                "退款成功",
+                "您的退款已处理完成，金额将原路返回。",
+                "TRADE_ORDER",
+                orderId);
+
             operationAuditLogService.log(
                     buyerId,
                     "USER",
@@ -541,6 +614,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         order.setStatus(REFUND_REQUESTED);
         order.setRefundStage(2);
         this.updateById(order);
+
+        userNotificationService.notifyUser(
+            order.getSellerId(),
+            "REFUND_APPLIED",
+            "买家申请退款",
+            "订单已提交退款申请，请及时处理。",
+            "TRADE_ORDER",
+            orderId);
 
         operationAuditLogService.log(
                 buyerId,
@@ -590,6 +671,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             order.setRefundStage(3);
             order.setStatus(REFUND_REQUESTED);  // 保持状态为退款申请中，等待买家回寄
             this.updateById(order);
+
+            userNotificationService.notifyUser(
+                order.getBuyerId(),
+                "REFUND_APPROVED",
+                "卖家同意退款",
+                "卖家已同意退货退款，请提交退货物流。",
+                "TRADE_ORDER",
+                orderId);
             operationAuditLogService.log(
                     sellerId,
                     "USER",
@@ -611,6 +700,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         }
 
         executeRefund(order, finalApprovedAmount, "ORDER_REFUND_APPROVED", "卖家同意退款");
+
+        userNotificationService.notifyUser(
+            order.getBuyerId(),
+            "REFUND_APPROVED",
+            "卖家同意退款",
+            fullRefund ? "您的退款已完成。" : "您的退款已部分处理完成。",
+            "TRADE_ORDER",
+            orderId);
 
         operationAuditLogService.log(
                 sellerId,
@@ -646,6 +743,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         order.setStatus(SHIPPED_PENDING_RECEIPT);
         order.setUpdateTime(LocalDateTime.now());
         this.updateById(order);
+
+        userNotificationService.notifyUser(
+            order.getBuyerId(),
+            "REFUND_REJECTED",
+            "卖家拒绝退款",
+            "如仍有争议，您可以发起客服介入。",
+            "TRADE_ORDER",
+            orderId);
 
         // 🔧 修复 Bug #2：拒绝退款时恢复库存
         if (order.getRefundType() != null && order.getRefundType() == 1 && order.getStatus() == PAID_PENDING_SHIPMENT) {
@@ -697,6 +802,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         order.setUpdateTime(LocalDateTime.now());
         this.updateById(order);
 
+        userNotificationService.notifyUser(
+            order.getSellerId(),
+            "RETURN_TRACKING_SUBMITTED",
+            "买家已提交退货物流",
+            "请及时关注退货物流并准备收货。",
+            "TRADE_ORDER",
+            orderId);
+
         operationAuditLogService.log(
                 buyerId,
                 "USER",
@@ -743,6 +856,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
 
         executeRefund(order, finalApprovedAmount, "ORDER_RETURN_REFUND_CONFIRMED", "卖家确认收货后退款");
 
+        userNotificationService.notifyUser(
+            order.getBuyerId(),
+            "RETURN_CONFIRMED",
+            "卖家已确认退货",
+            fullRefund ? "退货退款已完成。" : "退货退款已部分完成。",
+            "TRADE_ORDER",
+            orderId);
+
         operationAuditLogService.log(
                 sellerId,
                 "USER",
@@ -772,6 +893,14 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                 reason == null || reason.trim().isEmpty() ? "买家主动取消订单" : reason.trim(),
                 "BUYER"
         );
+
+        userNotificationService.notifyUser(
+            order.getSellerId(),
+            "ORDER_CANCELED",
+            "买家取消订单",
+            "订单已被买家取消。",
+            "TRADE_ORDER",
+            orderId);
 
         operationAuditLogService.log(
                 buyerId,
@@ -836,6 +965,20 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             }
 
             restoreGoodsStock(order.getGoodsId());
+                userNotificationService.notifyUser(
+                    order.getBuyerId(),
+                    "ORDER_TIMEOUT_CLOSED",
+                    "订单已超时关闭",
+                    "订单因长时间未支付已自动关闭，库存已释放。",
+                    "TRADE_ORDER",
+                    order.getId());
+                userNotificationService.notifyUser(
+                    order.getSellerId(),
+                    "ORDER_TIMEOUT_CLOSED",
+                    "订单已超时关闭",
+                    "有一笔待支付订单因超时被系统关闭。",
+                    "TRADE_ORDER",
+                    order.getId());
             operationAuditLogService.log(
                     order.getBuyerId(),
                     "SYSTEM",
@@ -1065,7 +1208,8 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
     private void restoreGoodsStock(Long goodsId) {
         Goods goods = goodsMapper.selectById(goodsId);
         if (goods != null) {
-            goods.setStock(goods.getStock() + 1);
+            int currentStock = goods.getStock() == null ? 0 : goods.getStock();
+            goods.setStock(currentStock + 1);
             if (goods.getStatus() == 3) {
                 goods.setStatus(1);
             }

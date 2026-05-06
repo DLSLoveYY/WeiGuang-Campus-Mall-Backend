@@ -135,7 +135,12 @@ public class GoodsController {
     public ResponseEntity<?> getGoodsList(@RequestParam(defaultValue = "1") Integer page,
                                           @RequestParam(defaultValue = "10") Integer size,
                                           @RequestParam(required = false) String keyword,
-                                          @RequestParam(required = false) String category) {
+                                          @RequestParam(required = false) String category,
+                                          @RequestParam(required = false) String conditionLevel,
+                                          @RequestParam(required = false) String deliveryMethod,
+                                          @RequestParam(required = false) java.math.BigDecimal minPrice,
+                                          @RequestParam(required = false) java.math.BigDecimal maxPrice,
+                                          @RequestParam(required = false) String sort) {
         Page<Goods> goodsPage = new Page<>(page, size);
         LambdaQueryWrapper<Goods> queryWrapper = new LambdaQueryWrapper<>();
 
@@ -144,14 +149,48 @@ public class GoodsController {
         if (category != null && !category.isEmpty()) {
             queryWrapper.eq(Goods::getCategory, category);
         }
+        if (conditionLevel != null && !conditionLevel.isEmpty()) {
+            queryWrapper.eq(Goods::getConditionLevel, conditionLevel);
+        }
+        if (deliveryMethod != null && !deliveryMethod.isEmpty()) {
+            // deliveryMethods 字段可能是 CSV，使用 like 支持匹配
+            queryWrapper.like(Goods::getDeliveryMethods, deliveryMethod);
+        }
+        if (minPrice != null) {
+            queryWrapper.ge(Goods::getPrice, minPrice);
+        }
+        if (maxPrice != null) {
+            queryWrapper.le(Goods::getPrice, maxPrice);
+        }
         if (keyword != null && !keyword.isEmpty()) {
             queryWrapper.and(w -> w.like(Goods::getTitle, keyword).or().like(Goods::getDescription, keyword));
         }
 
-        queryWrapper.orderByDesc(Goods::getCreateTime);
-        goodsMapper.selectPage(goodsPage, queryWrapper);
+        boolean smartSearch = keyword != null && !keyword.isBlank() && (sort == null || sort.isBlank() || "smart".equalsIgnoreCase(sort));
+        List<Goods> records;
+        long total;
 
-        List<Goods> records = goodsPage.getRecords();
+        if (smartSearch) {
+            List<Goods> matched = goodsMapper.selectList(queryWrapper);
+            matched.sort((a, b) -> Integer.compare(calculateSearchScore(b, keyword), calculateSearchScore(a, keyword)));
+            total = matched.size();
+            int from = Math.min((page - 1) * size, matched.size());
+            int to = Math.min(from + size, matched.size());
+            records = new java.util.ArrayList<>(matched.subList(from, to));
+        } else {
+            // 排序：支持 price_asc, price_desc, time_desc (默认)
+            if ("price_asc".equalsIgnoreCase(sort)) {
+                queryWrapper.orderByAsc(Goods::getPrice);
+            } else if ("price_desc".equalsIgnoreCase(sort)) {
+                queryWrapper.orderByDesc(Goods::getPrice);
+            } else {
+                queryWrapper.orderByDesc(Goods::getCreateTime);
+            }
+            goodsMapper.selectPage(goodsPage, queryWrapper);
+            records = goodsPage.getRecords();
+            total = goodsPage.getTotal();
+        }
+
         if (!records.isEmpty()) {
             Set<Long> sellerIds = records.stream().map(Goods::getSellerId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
             if (!sellerIds.isEmpty()) {
@@ -170,7 +209,27 @@ public class GoodsController {
             }
         }
 
-        return ResponseEntity.ok(Map.of("code", 200, "data", records, "total", goodsPage.getTotal()));
+        return ResponseEntity.ok(Map.of("code", 200, "data", records, "total", total));
+    }
+
+    private int calculateSearchScore(Goods goods, String keyword) {
+        if (goods == null || keyword == null || keyword.isBlank()) {
+            return 0;
+        }
+        String normalizedKeyword = keyword.trim().toLowerCase();
+        String title = goods.getTitle() == null ? "" : goods.getTitle().toLowerCase();
+        String description = goods.getDescription() == null ? "" : goods.getDescription().toLowerCase();
+        int score = 0;
+        if (title.equals(normalizedKeyword)) score += 100;
+        if (title.startsWith(normalizedKeyword)) score += 60;
+        if (title.contains(normalizedKeyword)) score += 40;
+        if (description.contains(normalizedKeyword)) score += 15;
+        score += (goods.getFavoritesCount() == null ? 0 : goods.getFavoritesCount()) * 2;
+        score += (goods.getViewCount() == null ? 0 : goods.getViewCount());
+        if (goods.getCreateTime() != null) {
+            score += Math.max(0, 30 - (int) java.time.Duration.between(goods.getCreateTime(), LocalDateTime.now()).toDays());
+        }
+        return score;
     }
 
     // ==========================================

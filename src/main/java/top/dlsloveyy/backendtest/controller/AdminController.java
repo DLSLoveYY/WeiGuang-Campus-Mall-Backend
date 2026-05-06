@@ -13,6 +13,7 @@ import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.mapper.GoodsMapper;
 import top.dlsloveyy.backendtest.mapper.SysNoticeMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
+import top.dlsloveyy.backendtest.service.UserNotificationService;
 import top.dlsloveyy.backendtest.util.JwtUtil;
 
 import java.time.LocalDateTime;
@@ -34,6 +35,9 @@ public class AdminController {
 
     @Autowired
     private SysNoticeMapper sysNoticeMapper;
+
+    @Autowired
+    private UserNotificationService userNotificationService;
 
     private User requireAdmin(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) return null;
@@ -406,6 +410,13 @@ public class AdminController {
         notice.setAuthor("管理员_" + admin.getUsername());
         notice.setCreateTime(LocalDateTime.now());
         sysNoticeMapper.insert(notice);
+
+        userNotificationService.notifyEnabledUsers(
+            "SYSTEM_NOTICE",
+            title,
+            content,
+            "SYS_NOTICE",
+            notice.getId());
 
         return ResponseEntity.ok(Map.of("code", 200, "message", "公告发布成功"));
     }

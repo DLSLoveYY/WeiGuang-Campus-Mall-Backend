@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api")
@@ -29,6 +30,7 @@ public class UploadController {
             if (file.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of("error", "文件为空"));
             }
+            validateImageFile(file);
 
             String newFileName = UUID.randomUUID() + getSafeExtension(file.getOriginalFilename());
             Path destination = uploadRoot.resolve(newFileName).normalize();
@@ -47,6 +49,7 @@ public class UploadController {
             return ResponseResult.error("文件为空");
         }
         try {
+            validateImageFile(file);
             Path avatarDir = uploadRoot.resolve("avatars");
             Files.createDirectories(avatarDir);
             String fileName = "avatar_" + UUID.randomUUID() + getSafeExtension(file.getOriginalFilename());
@@ -67,6 +70,20 @@ public class UploadController {
             return "";
         }
         return originalFilename.substring(dotIndex);
+    }
+
+    private static void validateImageFile(MultipartFile file) {
+        long maxSize = 10L * 1024 * 1024;
+        if (file.getSize() > maxSize) {
+            throw new IllegalArgumentException("图片大小不能超过 10MB");
+        }
+
+        String filename = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase();
+        String extension = getSafeExtension(filename).toLowerCase();
+        Set<String> allowed = Set.of(".jpg", ".jpeg", ".png", ".gif", ".webp");
+        if (!allowed.contains(extension)) {
+            throw new IllegalArgumentException("仅支持 jpg、jpeg、png、gif、webp 图片格式");
+        }
     }
 
     private static Path resolveUploadRoot(String uploadDir) {

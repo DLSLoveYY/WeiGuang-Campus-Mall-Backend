@@ -7,13 +7,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import top.dlsloveyy.backendtest.entity.TradeDispute;
 import top.dlsloveyy.backendtest.entity.TradeOrder;
+import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.mapper.TradeDisputeMapper;
 import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
+import top.dlsloveyy.backendtest.mapper.UserMapper;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
 import top.dlsloveyy.backendtest.service.AccountService;
 import top.dlsloveyy.backendtest.service.CustomerServiceCaseService;
 import top.dlsloveyy.backendtest.service.OperationAuditLogService;
 import top.dlsloveyy.backendtest.service.TradeDisputeService;
+import top.dlsloveyy.backendtest.service.UserNotificationService;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -42,6 +45,12 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
 
     @Autowired
     private CustomerServiceCaseService customerServiceCaseService;
+
+    @Autowired
+    private UserMapper userMapper;
+
+    @Autowired
+    private UserNotificationService userNotificationService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -87,6 +96,14 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
                 String.valueOf(dispute.getId()),
                 "orderId=" + orderId + ", status=" + OPEN
         );
+
+        userNotificationService.notifyUser(
+            dispute.getSellerId(),
+            "DISPUTE_CREATED",
+            "买家发起争议",
+            "订单出现退款/争议申请，请及时处理。",
+            "TRADE_DISPUTE",
+            dispute.getId());
         return ResponseResult.success("争议单已创建", dispute.getId());
     }
 
@@ -116,6 +133,14 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
                 "status=" + IN_REVIEW
         );
 
+        userNotificationService.notifyUser(
+            dispute.getSellerId(),
+            "DISPUTE_EVIDENCE_UPDATED",
+            "买家补充了证据",
+            "争议单已有新的买家证据，请及时查看。",
+            "TRADE_DISPUTE",
+            disputeId);
+
         return ResponseResult.success("已补充买家证据");
     }
 
@@ -144,6 +169,14 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
                 String.valueOf(disputeId),
                 "status=" + IN_REVIEW
         );
+
+        userNotificationService.notifyUser(
+            dispute.getBuyerId(),
+            "DISPUTE_EVIDENCE_UPDATED",
+            "卖家补充了证据",
+            "争议单已有新的卖家证据，请及时查看。",
+            "TRADE_DISPUTE",
+            disputeId);
 
         return ResponseResult.success("已补充卖家证据");
     }
@@ -199,11 +232,32 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
                     "DISPUTE_REFUND:IN:" + order.getId() + ":" + order.getBuyerId(),
                     "争议裁决买家胜，退款入账"
             );
+
+            applyCreditChange(order.getSellerId(), -8);
+            applyCreditChange(order.getBuyerId(), 2);
         } else {
             order.setStatus(SHIPPED_PENDING_RECEIPT);
             order.setUpdateTime(LocalDateTime.now());
             tradeOrderMapper.updateById(order);
+
+            applyCreditChange(order.getBuyerId(), -5);
+            applyCreditChange(order.getSellerId(), 2);
         }
+
+        userNotificationService.notifyUser(
+                order.getBuyerId(),
+                "DISPUTE_RESOLVED",
+                "争议已处理",
+                decision == BUYER_WON ? "平台已支持您的退款诉求。" : "平台未支持退款诉求，请继续履约。",
+                "TRADE_DISPUTE",
+                disputeId);
+        userNotificationService.notifyUser(
+                order.getSellerId(),
+                "DISPUTE_RESOLVED",
+                "争议已处理",
+                decision == BUYER_WON ? "平台已判定退款，请注意处理资金。" : "平台维持订单继续履约。",
+                "TRADE_DISPUTE",
+                disputeId);
 
         operationAuditLogService.log(
                 adminId,
@@ -286,6 +340,21 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
                 "orderId=" + orderId + ", orderStatus=" + REFUND_REQUESTED
         );
 
+        userNotificationService.notifyUser(
+            order.getSellerId(),
+            "DISPUTE_ESCALATED",
+            "争议已升级客服介入",
+            "买家在卖家拒绝后发起客服介入，请尽快配合。",
+            "TRADE_DISPUTE",
+            newDispute.getId());
+        userNotificationService.notifyUser(
+            buyerId,
+            "DISPUTE_ESCALATED",
+            "已提交客服介入",
+            "您的争议已升级到客服介入，请留意工单进度。",
+            "TRADE_DISPUTE",
+            newDispute.getId());
+
         return ResponseResult.success("客服已介入处理", caseResult.getData());
     }
 
@@ -309,5 +378,19 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
             return order.getOrderPrice();
         }
         return BigDecimal.ZERO;
+    }
+
+    private void applyCreditChange(Long userId, int delta) {
+        if (userId == null || delta == 0) {
+            return;
+        }
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            return;
+        }
+        int current = user.getCreditScore() == null ? 100 : user.getCreditScore();
+        int next = Math.max(0, Math.min(200, current + delta));
+        user.setCreditScore(next);
+        userMapper.updateById(user);
     }
 }

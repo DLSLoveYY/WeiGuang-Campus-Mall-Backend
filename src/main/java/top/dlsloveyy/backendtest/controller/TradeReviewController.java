@@ -11,6 +11,7 @@ import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
 import top.dlsloveyy.backendtest.mapper.TradeReviewMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
+import top.dlsloveyy.backendtest.service.UserNotificationService;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -28,6 +29,9 @@ public class TradeReviewController {
 
     @Autowired
     private UserMapper userMapper;
+
+    @Autowired
+    private UserNotificationService userNotificationService;
 
     /**
      * 提交评价（买家评卖家）
@@ -78,6 +82,21 @@ public class TradeReviewController {
         review.setRole("buyer");
         review.setCreateTime(LocalDateTime.now());
         tradeReviewMapper.insert(review);
+
+        User seller = userMapper.selectById(order.getSellerId());
+        if (seller != null) {
+            int current = seller.getCreditScore() == null ? 100 : seller.getCreditScore();
+            int delta = Math.max(-4, Math.min(4, (score - 3) * 2));
+            seller.setCreditScore(Math.max(0, Math.min(200, current + delta)));
+            userMapper.updateById(seller);
+            userNotificationService.notifyUser(
+                    seller.getId(),
+                    "REVIEW_RECEIVED",
+                    "您收到了一条交易评价",
+                    "买家已对订单进行评价，当前信用分已同步更新。",
+                    "TRADE_REVIEW",
+                    review.getId());
+        }
 
         return ResponseEntity.ok(Map.of("code", 200, "message", "评价成功，感谢您的反馈！"));
     }

@@ -314,6 +314,25 @@ CREATE TABLE IF NOT EXISTS sys_notice (
   INDEX idx_sys_notice_create_time (create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 10.1 用户通知表
+CREATE TABLE IF NOT EXISTS user_notification (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  recipient_id BIGINT NOT NULL,
+  type VARCHAR(32) NOT NULL,
+  title VARCHAR(128) NOT NULL,
+  content TEXT,
+  related_type VARCHAR(64),
+  related_id BIGINT,
+  channel VARCHAR(16),
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  read_time DATETIME,
+  create_time DATETIME NOT NULL,
+  update_time DATETIME,
+  INDEX idx_user_notification_recipient (recipient_id),
+  INDEX idx_user_notification_read (recipient_id, is_read),
+  INDEX idx_user_notification_related (related_type, related_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 11. 操作审计日志表 (保留)
 CREATE TABLE IF NOT EXISTS operation_audit_log (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
