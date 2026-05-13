@@ -2,15 +2,26 @@ package top.dlsloveyy.backendtest.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.util.UriComponentsBuilder;
 import top.dlsloveyy.backendtest.entity.UserAddress;
 import top.dlsloveyy.backendtest.mapper.UserAddressMapper;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
 import top.dlsloveyy.backendtest.service.UserAddressService;
 
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -19,6 +30,14 @@ public class UserAddressServiceImpl implements UserAddressService {
 
     @Autowired
     private UserAddressMapper userAddressMapper;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Value("${amap.web-service.key:}")
+    private String amapWebServiceKey;
+
+    private final HttpClient httpClient = HttpClient.newHttpClient();
 
     @Override
     public ResponseResult<?> list(Long userId) {
@@ -40,6 +59,8 @@ public class UserAddressServiceImpl implements UserAddressService {
         address.setCity(readString(payload, "city"));
         address.setDistrict(readString(payload, "district"));
         address.setDetail(readString(payload, "detail", "detailAddress"));
+        address.setLongitude(readBigDecimal(payload, "longitude"));
+        address.setLatitude(readBigDecimal(payload, "latitude"));
 
         ResponseResult<?> validation = validateAddressPayload(address);
         if (validation != null) {
@@ -80,6 +101,13 @@ public class UserAddressServiceImpl implements UserAddressService {
         if (city != null) existed.setCity(city);
         if (district != null) existed.setDistrict(district);
         if (detail != null) existed.setDetail(detail);
+
+        if (payload.containsKey("longitude")) {
+            existed.setLongitude(readBigDecimal(payload, "longitude"));
+        }
+        if (payload.containsKey("latitude")) {
+            existed.setLatitude(readBigDecimal(payload, "latitude"));
+        }
 
         ResponseResult<?> validation = validateAddressPayload(existed);
         if (validation != null) {
@@ -144,6 +172,107 @@ public class UserAddressServiceImpl implements UserAddressService {
         return ResponseResult.success("默认地址设置成功", addressId);
     }
 
+    @Override
+    public ResponseResult<?> reverseGeocode(Long userId, Double longitude, Double latitude) {
+        if (userId == null) {
+            return ResponseResult.error(401, "请先登录");
+        }
+        if (longitude == null || latitude == null) {
+            return ResponseResult.error(400, "经纬度不能为空");
+        }
+        if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+            return ResponseResult.error(400, "经纬度不合法");
+        }
+        if (amapWebServiceKey == null || amapWebServiceKey.isBlank()) {
+            return ResponseResult.error(500, "地图服务未配置");
+        }
+
+        try {
+            URI uri = UriComponentsBuilder
+                    .fromUriString("https://restapi.amap.com/v3/geocode/regeo")
+                    .queryParam("key", amapWebServiceKey)
+                    .queryParam("location", longitude + "," + latitude)
+                    .queryParam("extensions", "all")
+                    .queryParam("radius", 200)
+                    .build(true)
+                    .toUri();
+
+            HttpRequest request = HttpRequest.newBuilder(uri).GET().build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                return ResponseResult.error(502, "地图服务调用失败");
+            }
+
+            JsonNode root = objectMapper.readTree(response.body());
+            if (!"1".equals(root.path("status").asText())) {
+                String info = root.path("info").asText();
+                return ResponseResult.error(502, info == null || info.isBlank() ? "地图服务返回异常" : info);
+            }
+
+            JsonNode regeocode = root.path("regeocode");
+            JsonNode component = regeocode.path("addressComponent");
+
+            String province = safeText(component.path("province"));
+            String city = safeText(component.path("city"));
+            String district = safeText(component.path("district"));
+            city = normalizeCity(province, city);
+
+            String township = safeText(component.path("township"));
+            JsonNode streetNumber = component.path("streetNumber");
+            String street = safeText(streetNumber.path("street"));
+            String number = safeText(streetNumber.path("number"));
+            String formatted = safeText(regeocode.path("formatted_address"));
+
+            String detail = joinDetail(township, street, number);
+            if (detail.isBlank()) detail = formatted;
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("province", province);
+            data.put("city", city);
+            data.put("district", district);
+            data.put("detail", detail);
+            data.put("formattedAddress", formatted);
+            data.put("longitude", longitude);
+            data.put("latitude", latitude);
+            return ResponseResult.success("定位成功", data);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ResponseResult.error(502, "地图服务调用中断");
+        } catch (IOException e) {
+            return ResponseResult.error(502, "地图服务调用失败");
+        }
+    }
+
+    private String safeText(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return "";
+        if (node.isArray()) {
+            if (node.isEmpty()) return "";
+            return safeText(node.get(0));
+        }
+        return node.asText("").trim();
+    }
+
+    private String joinDetail(String township, String street, String number) {
+        StringBuilder sb = new StringBuilder();
+        if (!township.isBlank()) sb.append(township);
+        if (!street.isBlank()) sb.append(street);
+        if (!number.isBlank()) sb.append(number);
+        return sb.toString().trim();
+    }
+
+    private String normalizeCity(String province, String city) {
+        if (city != null && !city.isBlank()) {
+            return city;
+        }
+        if (province == null || province.isBlank()) {
+            return "";
+        }
+        if ("北京市".equals(province) || "上海市".equals(province) || "天津市".equals(province) || "重庆市".equals(province)) {
+            return "市辖区";
+        }
+        return province;
+    }
+
     private void clearDefault(Long userId) {
         userAddressMapper.update(null, new LambdaUpdateWrapper<UserAddress>()
                 .eq(UserAddress::getUserId, userId)
@@ -171,24 +300,40 @@ public class UserAddressServiceImpl implements UserAddressService {
         if (value == null) {
             return 0;
         }
-        
+
         if (value instanceof Boolean) {
             return Boolean.TRUE.equals(value) ? 1 : 0;
         }
-        
+
         if (value instanceof Integer) {
             Integer intValue = (Integer) value;
             return (intValue == 1) ? 1 : 0;
         }
-        
+
         if (value instanceof Number) {
             return (((Number) value).intValue() == 1) ? 1 : 0;
         }
-        
+
         try {
             return (Integer.parseInt(value.toString()) == 1) ? 1 : 0;
         } catch (NumberFormatException e) {
             return 0;
+        }
+    }
+
+    private BigDecimal readBigDecimal(Map<String, Object> payload, String key) {
+        Object value = payload.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(text);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

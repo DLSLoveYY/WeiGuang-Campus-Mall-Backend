@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -29,6 +30,10 @@ public class UserAddress {
     private String detail;
 
     private Integer isDefault;
+
+    private BigDecimal longitude;
+
+    private BigDecimal latitude;
 
     private LocalDateTime createTime;
 

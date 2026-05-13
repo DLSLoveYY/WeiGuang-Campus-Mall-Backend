@@ -58,6 +58,15 @@ public class Goods {
     @Column(length = 255)
     private String tradeAddress; // 卖家提供的交易地址（校园面交时使用）
 
+    @Column(precision = 10, scale = 6)
+    private BigDecimal tradeLng;
+
+    @Column(precision = 10, scale = 6)
+    private BigDecimal tradeLat;
+
+    @Column(length = 20)
+    private String tradeGeoSource;
+
     @Column(nullable = false)
     private Integer viewCount = 0; // 浏览量
 
@@ -83,6 +92,14 @@ public class Goods {
     @Transient
     @com.baomidou.mybatisplus.annotation.TableField(exist = false)
     private String sellerAvatar;
+
+    @Transient
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    private Integer sellerCreditScore;
+
+    @Transient
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    private BigDecimal distanceKm;
 
     @PrePersist
     protected void onCreate() {

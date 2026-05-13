@@ -1,7 +1,6 @@
 package top.dlsloveyy.backendtest.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -10,12 +9,15 @@ import org.springframework.web.bind.annotation.*;
 import top.dlsloveyy.backendtest.entity.Goods;
 import top.dlsloveyy.backendtest.entity.GoodsFavorite;
 import top.dlsloveyy.backendtest.entity.User;
+import top.dlsloveyy.backendtest.mapper.GoodsDraftMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsFavoriteMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
 import top.dlsloveyy.backendtest.util.JwtUtil;
 import top.dlsloveyy.backendtest.service.AuditService;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -30,6 +32,8 @@ public class GoodsController {
     private UserMapper userMapper;
     @Autowired
     private GoodsFavoriteMapper goodsFavoriteMapper;
+    @Autowired
+    private GoodsDraftMapper goodsDraftMapper;
     @Autowired
     private JwtUtil jwtUtil;
     @Autowired
@@ -50,6 +54,8 @@ public class GoodsController {
         }
 
         goods.setSellerId(user.getId());
+        Long draftId = goods.getId();
+        goods.setId(null);
         goods.setViewCount(0);
         goods.setFavoritesCount(0);
         goods.setCreateTime(LocalDateTime.now());
@@ -70,6 +76,7 @@ public class GoodsController {
         if (hasSensitive) {
             goods.setStatus(0);
             goodsMapper.insert(goods);
+            deleteLoadedDraft(user.getId(), draftId);
             return ResponseEntity.ok(Map.of(
                     "code", 200,
                     "message", "系统检测到内容疑似违规，商品已转入人工审核池，请耐心等待！",
@@ -78,8 +85,20 @@ public class GoodsController {
         } else {
             goods.setStatus(1);
             goodsMapper.insert(goods);
+            deleteLoadedDraft(user.getId(), draftId);
             return ResponseEntity.ok(Map.of("code", 200, "message", "商品发布成功，已自动上架！", "id", goods.getId()));
         }
+    }
+
+    private void deleteLoadedDraft(Long sellerId, Long draftId) {
+        if (draftId != null) {
+            goodsDraftMapper.delete(new LambdaQueryWrapper<top.dlsloveyy.backendtest.entity.GoodsDraft>()
+                .eq(top.dlsloveyy.backendtest.entity.GoodsDraft::getId, draftId)
+                .eq(top.dlsloveyy.backendtest.entity.GoodsDraft::getSellerId, sellerId));
+            return;
+        }
+        goodsDraftMapper.delete(new LambdaQueryWrapper<top.dlsloveyy.backendtest.entity.GoodsDraft>()
+            .eq(top.dlsloveyy.backendtest.entity.GoodsDraft::getSellerId, sellerId));
     }
 
     // ==========================================
@@ -109,6 +128,9 @@ public class GoodsController {
         original.setDeliveryMethod(updatedGoods.getDeliveryMethod());
         original.setDeliveryMethods(updatedGoods.getDeliveryMethods());
         original.setTradeAddress(updatedGoods.getTradeAddress());
+        original.setTradeLng(updatedGoods.getTradeLng());
+        original.setTradeLat(updatedGoods.getTradeLat());
+        original.setTradeGeoSource(updatedGoods.getTradeGeoSource());
         try {
             normalizeGoodsDeliveryMethods(original);
         } catch (IllegalArgumentException e) {
@@ -138,58 +160,73 @@ public class GoodsController {
                                           @RequestParam(required = false) String category,
                                           @RequestParam(required = false) String conditionLevel,
                                           @RequestParam(required = false) String deliveryMethod,
-                                          @RequestParam(required = false) java.math.BigDecimal minPrice,
-                                          @RequestParam(required = false) java.math.BigDecimal maxPrice,
-                                          @RequestParam(required = false) String sort) {
-        Page<Goods> goodsPage = new Page<>(page, size);
+                                          @RequestParam(required = false) BigDecimal minPrice,
+                                          @RequestParam(required = false) BigDecimal maxPrice,
+                                          @RequestParam(required = false) String sort,
+                                          @RequestParam(required = false, defaultValue = "none") String nearbyMode,
+                                          @RequestParam(required = false) BigDecimal refLng,
+                                          @RequestParam(required = false) BigDecimal refLat,
+                                          @RequestParam(required = false) BigDecimal maxDistanceKm,
+                                          @RequestParam(required = false, defaultValue = "asc") String distanceSort) {
         LambdaQueryWrapper<Goods> queryWrapper = new LambdaQueryWrapper<>();
 
-        queryWrapper.eq(Goods::getStatus, 1); // 必须是出售中的商品
+        queryWrapper.eq(Goods::getStatus, 1);
 
         if (category != null && !category.isEmpty()) {
-            queryWrapper.eq(Goods::getCategory, category);
+            List<String> categories = Arrays.stream(category.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+            if (!categories.isEmpty()) {
+                queryWrapper.in(Goods::getCategory, categories);
+            }
         }
         if (conditionLevel != null && !conditionLevel.isEmpty()) {
-            queryWrapper.eq(Goods::getConditionLevel, conditionLevel);
-        }
-        if (deliveryMethod != null && !deliveryMethod.isEmpty()) {
-            // deliveryMethods 字段可能是 CSV，使用 like 支持匹配
-            queryWrapper.like(Goods::getDeliveryMethods, deliveryMethod);
-        }
-        if (minPrice != null) {
-            queryWrapper.ge(Goods::getPrice, minPrice);
-        }
-        if (maxPrice != null) {
-            queryWrapper.le(Goods::getPrice, maxPrice);
-        }
-        if (keyword != null && !keyword.isEmpty()) {
-            queryWrapper.and(w -> w.like(Goods::getTitle, keyword).or().like(Goods::getDescription, keyword));
-        }
-
-        boolean smartSearch = keyword != null && !keyword.isBlank() && (sort == null || sort.isBlank() || "smart".equalsIgnoreCase(sort));
-        List<Goods> records;
-        long total;
-
-        if (smartSearch) {
-            List<Goods> matched = goodsMapper.selectList(queryWrapper);
-            matched.sort((a, b) -> Integer.compare(calculateSearchScore(b, keyword), calculateSearchScore(a, keyword)));
-            total = matched.size();
-            int from = Math.min((page - 1) * size, matched.size());
-            int to = Math.min(from + size, matched.size());
-            records = new java.util.ArrayList<>(matched.subList(from, to));
-        } else {
-            // 排序：支持 price_asc, price_desc, time_desc (默认)
-            if ("price_asc".equalsIgnoreCase(sort)) {
-                queryWrapper.orderByAsc(Goods::getPrice);
-            } else if ("price_desc".equalsIgnoreCase(sort)) {
-                queryWrapper.orderByDesc(Goods::getPrice);
-            } else {
-                queryWrapper.orderByDesc(Goods::getCreateTime);
+            List<String> conditionLevels = Arrays.stream(conditionLevel.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+            if (!conditionLevels.isEmpty()) {
+                queryWrapper.in(Goods::getConditionLevel, conditionLevels);
             }
-            goodsMapper.selectPage(goodsPage, queryWrapper);
-            records = goodsPage.getRecords();
-            total = goodsPage.getTotal();
         }
+        if (deliveryMethod != null && !deliveryMethod.isEmpty()) queryWrapper.like(Goods::getDeliveryMethods, deliveryMethod);
+        if (minPrice != null) queryWrapper.ge(Goods::getPrice, minPrice);
+        if (maxPrice != null) queryWrapper.le(Goods::getPrice, maxPrice);
+        if (keyword != null && !keyword.isEmpty()) queryWrapper.and(w -> w.like(Goods::getTitle, keyword).or().like(Goods::getDescription, keyword));
+
+        boolean enableNearby = "buyer_profile".equalsIgnoreCase(nearbyMode) || "custom_point".equalsIgnoreCase(nearbyMode);
+        boolean hasReferencePoint = refLng != null && refLat != null;
+
+        List<Goods> matched = goodsMapper.selectList(queryWrapper);
+        if (enableNearby && hasReferencePoint && "校园面交".equals(deliveryMethod)) {
+            boolean hasAnyGeoGoods = matched.stream().anyMatch(item -> item.getTradeLng() != null && item.getTradeLat() != null);
+            if (hasAnyGeoGoods) {
+                matched = matched.stream()
+                        .filter(item -> item.getTradeLng() != null && item.getTradeLat() != null)
+                        .peek(item -> item.setDistanceKm(calcDistanceKm(refLat, refLng, item.getTradeLat(), item.getTradeLng())))
+                        .filter(item -> maxDistanceKm == null || item.getDistanceKm().compareTo(maxDistanceKm) <= 0)
+                        .sorted((a, b) -> {
+                            BigDecimal da = a.getDistanceKm() == null ? new BigDecimal("999999") : a.getDistanceKm();
+                            BigDecimal db = b.getDistanceKm() == null ? new BigDecimal("999999") : b.getDistanceKm();
+                            return "desc".equalsIgnoreCase(distanceSort) ? db.compareTo(da) : da.compareTo(db);
+                        })
+                        .toList();
+            }
+        } else {
+            if (keyword != null && !keyword.isBlank() && (sort == null || sort.isBlank() || "smart".equalsIgnoreCase(sort))) {
+                matched = matched.stream().sorted((a, b) -> Integer.compare(calculateSearchScore(b, keyword), calculateSearchScore(a, keyword))).toList();
+            } else if ("price_asc".equalsIgnoreCase(sort)) {
+                matched = matched.stream().sorted(Comparator.comparing(Goods::getPrice, Comparator.nullsLast(BigDecimal::compareTo))).toList();
+            } else if ("price_desc".equalsIgnoreCase(sort)) {
+                matched = matched.stream().sorted((a, b) -> {
+                    BigDecimal pa = a.getPrice() == null ? BigDecimal.ZERO : a.getPrice();
+                    BigDecimal pb = b.getPrice() == null ? BigDecimal.ZERO : b.getPrice();
+                    return pb.compareTo(pa);
+                }).toList();
+            } else {
+                matched = matched.stream().sorted(Comparator.comparing(Goods::getCreateTime, Comparator.nullsLast(LocalDateTime::compareTo)).reversed()).toList();
+            }
+        }
+
+        long total = matched.size();
+        int from = Math.min((page - 1) * size, matched.size());
+        int to = Math.min(from + size, matched.size());
+        List<Goods> records = new ArrayList<>(matched.subList(from, to));
 
         if (!records.isEmpty()) {
             Set<Long> sellerIds = records.stream().map(Goods::getSellerId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
@@ -202,9 +239,12 @@ public class GoodsController {
                         g.setSellerName(seller.getUsername());
                         String avatar = seller.getAvatar();
                         g.setSellerAvatar(avatar == null ? "" : avatar);
+                        g.setSellerCreditScore(seller.getCreditScore());
                     }
-                    // 统一处理历史数据中可能包含的本地域名前缀
                     normalizeGoodsImages(g);
+                    if (g.getDistanceKm() != null) {
+                        g.setDistanceKm(g.getDistanceKm().setScale(2, RoundingMode.HALF_UP));
+                    }
                 });
             }
         }
@@ -242,22 +282,35 @@ public class GoodsController {
         List<Goods> allActive = goodsMapper.selectList(new LambdaQueryWrapper<Goods>().eq(Goods::getStatus, 1));
 
         // 计算热度：浏览量*1.2 + 收藏数*4
-        List<Map<String, Object>> hotList = allActive.stream().map(g -> {
-            // ✅ 统一处理图片 URL
-            normalizeGoodsImages(g);
-            Map<String, Object> map = new HashMap<>();
-            map.put("id", g.getId());
-            map.put("title", g.getTitle());
-            map.put("price", g.getPrice());
-            map.put("images", g.getImages());
-            map.put("score", g.getViewCount() * 1.2 + g.getFavoritesCount() * 4.0);
-            return map;
-        }).sorted((a, b) -> Double.compare((Double) b.get("score"), (Double) a.get("score"))).toList();
+        List<Goods> hotList = allActive.stream()
+                .peek(this::normalizeGoodsImages)
+                .sorted((a, b) -> Double.compare(
+                        (b.getViewCount() == null ? 0 : b.getViewCount()) * 1.2 + (b.getFavoritesCount() == null ? 0 : b.getFavoritesCount()) * 4.0,
+                        (a.getViewCount() == null ? 0 : a.getViewCount()) * 1.2 + (a.getFavoritesCount() == null ? 0 : a.getFavoritesCount()) * 4.0
+                ))
+                .toList();
 
         // 内存分页
         int from = Math.min((page - 1) * size, hotList.size());
         int to = Math.min(from + size, hotList.size());
-        return ResponseEntity.ok(Map.of("code", 200, "data", hotList.subList(from, to), "total", hotList.size()));
+        List<Goods> pageList = hotList.subList(from, to);
+        if (!pageList.isEmpty()) {
+            Set<Long> sellerIds = pageList.stream().map(Goods::getSellerId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+            if (!sellerIds.isEmpty()) {
+                List<User> sellers = userMapper.selectBatchIds(sellerIds);
+                Map<Long, User> sellerMap = sellers.stream().collect(java.util.stream.Collectors.toMap(User::getId, u -> u));
+                pageList.forEach(g -> {
+                    User seller = sellerMap.get(g.getSellerId());
+                    if (seller != null) {
+                        g.setSellerName(seller.getUsername());
+                        String avatar = seller.getAvatar();
+                        g.setSellerAvatar(avatar == null ? "" : avatar);
+                        g.setSellerCreditScore(seller.getCreditScore());
+                    }
+                });
+            }
+        }
+        return ResponseEntity.ok(Map.of("code", 200, "data", pageList, "total", hotList.size()));
     }
 
     // ==========================================
@@ -393,6 +446,21 @@ public class GoodsController {
         goods.setImages(images);
     }
 
+    private BigDecimal calcDistanceKm(BigDecimal lat1, BigDecimal lng1, BigDecimal lat2, BigDecimal lng2) {
+        if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) {
+            return null;
+        }
+        double earthRadiusKm = 6371.0;
+        double dLat = Math.toRadians(lat2.doubleValue() - lat1.doubleValue());
+        double dLng = Math.toRadians(lng2.doubleValue() - lng1.doubleValue());
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+                + Math.cos(Math.toRadians(lat1.doubleValue()))
+                * Math.cos(Math.toRadians(lat2.doubleValue()))
+                * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return BigDecimal.valueOf(earthRadiusKm * c);
+    }
+
     private void normalizeGoodsDeliveryMethods(Goods goods) {
         if (goods == null) {
             return;
@@ -422,6 +490,9 @@ public class GoodsController {
         goods.setDeliveryMethod(normalized.iterator().next());
         if (!normalized.contains("校园面交")) {
             goods.setTradeAddress("");
+            goods.setTradeLng(null);
+            goods.setTradeLat(null);
+            goods.setTradeGeoSource(null);
         }
     }
 

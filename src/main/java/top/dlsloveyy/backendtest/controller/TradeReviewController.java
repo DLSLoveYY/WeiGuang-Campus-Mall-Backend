@@ -5,9 +5,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import top.dlsloveyy.backendtest.config.JwtFilter;
+import top.dlsloveyy.backendtest.entity.Goods;
 import top.dlsloveyy.backendtest.entity.TradeOrder;
 import top.dlsloveyy.backendtest.entity.TradeReview;
 import top.dlsloveyy.backendtest.entity.User;
+import top.dlsloveyy.backendtest.mapper.GoodsMapper;
 import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
 import top.dlsloveyy.backendtest.mapper.TradeReviewMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
@@ -26,6 +28,9 @@ public class TradeReviewController {
 
     @Autowired
     private TradeOrderMapper tradeOrderMapper;
+
+    @Autowired
+    private GoodsMapper goodsMapper;
 
     @Autowired
     private UserMapper userMapper;
@@ -142,9 +147,24 @@ public class TradeReviewController {
         Map<Long, User> reviewerMap = userMapper.selectBatchIds(reviewerIds)
                 .stream().collect(Collectors.toMap(User::getId, u -> u));
 
+        // 批量查订单与商品（展示评价对应的商品信息）
+        List<Long> orderIds = reviews.stream().map(TradeReview::getOrderId).distinct().collect(Collectors.toList());
+        Map<Long, TradeOrder> orderMap = tradeOrderMapper.selectBatchIds(orderIds)
+            .stream().collect(Collectors.toMap(TradeOrder::getId, o -> o));
+        List<Long> goodsIds = orderMap.values().stream()
+            .map(TradeOrder::getGoodsId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .collect(Collectors.toList());
+        Map<Long, Goods> goodsMap = goodsIds.isEmpty()
+            ? Map.of()
+            : goodsMapper.selectBatchIds(goodsIds).stream()
+                .collect(Collectors.toMap(Goods::getId, g -> g));
+
         List<Map<String, Object>> result = reviews.stream().map(r -> {
             Map<String, Object> item = new HashMap<>();
             item.put("id", r.getId());
+            item.put("orderId", r.getOrderId());
             item.put("score", r.getScore());
             item.put("content", r.getContent());
             item.put("createTime", r.getCreateTime());
@@ -152,6 +172,14 @@ public class TradeReviewController {
             if (reviewer != null) {
                 item.put("reviewerName", reviewer.getUsername());
                 item.put("reviewerAvatar", reviewer.getAvatar() != null ? reviewer.getAvatar() : "");
+            }
+            TradeOrder order = orderMap.get(r.getOrderId());
+            if (order != null) {
+                item.put("goodsId", order.getGoodsId());
+                Goods goods = goodsMap.get(order.getGoodsId());
+                if (goods != null) {
+                    item.put("goodsTitle", goods.getTitle());
+                }
             }
             return item;
         }).collect(Collectors.toList());

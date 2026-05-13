@@ -15,4 +15,6 @@ public interface UserAddressService {
     ResponseResult<?> remove(Long userId, Long addressId);
 
     ResponseResult<?> setDefault(Long userId, Long addressId);
+
+    ResponseResult<?> reverseGeocode(Long userId, Double longitude, Double latitude);
 }

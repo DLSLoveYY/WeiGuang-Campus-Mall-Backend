@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS user (
   contact_phone VARCHAR(20),
   wechat_id VARCHAR(50),
   dorm_building VARCHAR(100),
+  profile_lng DECIMAL(10,6),
+  profile_lat DECIMAL(10,6),
   credit_score INT NOT NULL DEFAULT 100,
   balance DECIMAL(10,2) NOT NULL DEFAULT 0,
   frozen_balance DECIMAL(10,2) NOT NULL DEFAULT 0,
@@ -43,6 +45,9 @@ CREATE TABLE IF NOT EXISTS goods (
   delivery_method VARCHAR(50),
   delivery_methods VARCHAR(100),
   trade_address VARCHAR(255),
+  trade_lng DECIMAL(10,6),
+  trade_lat DECIMAL(10,6),
+  trade_geo_source VARCHAR(20),
   view_count INT NOT NULL DEFAULT 0,
   create_time DATETIME NOT NULL,
   update_time DATETIME NOT NULL,
@@ -196,6 +201,104 @@ SET @ddl := (
     ),
     'SELECT 1',
     'ALTER TABLE trade_order ADD COLUMN handoff_confirm_time DATETIME'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods' AND column_name = 'trade_geo_source'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods ADD COLUMN trade_geo_source VARCHAR(20)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods' AND column_name = 'trade_lng'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods ADD COLUMN trade_lng DECIMAL(10,6)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods' AND column_name = 'trade_lat'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods ADD COLUMN trade_lat DECIMAL(10,6)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'user' AND column_name = 'profile_lng'
+    ),
+    'SELECT 1',
+    'ALTER TABLE user ADD COLUMN profile_lng DECIMAL(10,6)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'user' AND column_name = 'profile_lat'
+    ),
+    'SELECT 1',
+    'ALTER TABLE user ADD COLUMN profile_lat DECIMAL(10,6)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'user_address' AND column_name = 'longitude'
+    ),
+    'SELECT 1',
+    'ALTER TABLE user_address ADD COLUMN longitude DECIMAL(10,6)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'user_address' AND column_name = 'latitude'
+    ),
+    'SELECT 1',
+    'ALTER TABLE user_address ADD COLUMN latitude DECIMAL(10,6)'
   )
 );
 PREPARE stmt FROM @ddl;
@@ -380,6 +483,7 @@ CREATE TABLE IF NOT EXISTS customer_service_case (
   status INT NOT NULL DEFAULT 0,
   priority INT NOT NULL DEFAULT 2,
   source VARCHAR(64),
+  request_title VARCHAR(120),
   assigned_admin_id BIGINT,
   latest_action VARCHAR(255),
   sla_deadline_time DATETIME,
@@ -392,6 +496,20 @@ CREATE TABLE IF NOT EXISTS customer_service_case (
   INDEX idx_customer_service_case_status (status),
   INDEX idx_customer_service_case_assigned (assigned_admin_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'customer_service_case' AND column_name = 'request_title'
+    ),
+    'SELECT 1',
+    'ALTER TABLE customer_service_case ADD COLUMN request_title VARCHAR(120)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 -- 14. 工单操作记录表 (保留)
 CREATE TABLE IF NOT EXISTS customer_service_case_action (
@@ -437,6 +555,8 @@ CREATE TABLE IF NOT EXISTS user_address (
   district VARCHAR(64),
   detail VARCHAR(255) NOT NULL,
   is_default TINYINT NOT NULL DEFAULT 0,
+  longitude DECIMAL(10,6),
+  latitude DECIMAL(10,6),
   create_time DATETIME NOT NULL,
   update_time DATETIME,
   INDEX idx_user_address_user_id (user_id),

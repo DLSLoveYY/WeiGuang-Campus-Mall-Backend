@@ -86,6 +86,27 @@ public class CustomerServiceCaseController {
         return customerServiceCaseService.appendCaseAction(id, userId, actorRole, actionType, content, attachments);
     }
 
+    @PostMapping("/request")
+    public ResponseResult<?> createUserRequest(@RequestBody Map<String, String> payload,
+                                               HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) {
+            return ResponseResult.error(401, "请先登录");
+        }
+        String category = payload.getOrDefault("category", "其他");
+        String title = payload.get("title");
+        String detail = payload.get("detail");
+        Long orderId = null;
+        if (payload.get("orderId") != null && !payload.get("orderId").isBlank()) {
+            try {
+                orderId = Long.valueOf(payload.get("orderId"));
+            } catch (NumberFormatException ex) {
+                return ResponseResult.error("订单ID格式不正确");
+            }
+        }
+        return customerServiceCaseService.createUserRequest(userId, orderId, category, title, detail, 2);
+    }
+
     @GetMapping("/admin/list")
     public ResponseResult<?> adminList(@RequestParam(required = false) Integer status,
                                        @RequestParam(required = false) Long assignedAdminId,
@@ -123,5 +144,17 @@ public class CustomerServiceCaseController {
         Integer decision = payload.get("decision") == null ? null : Integer.valueOf(String.valueOf(payload.get("decision")));
         String resolution = payload.get("resolution") == null ? "客服已处理" : String.valueOf(payload.get("resolution"));
         return customerServiceCaseService.resolveCase(id, operatorId, decision, resolution);
+    }
+
+    @PutMapping("/admin/{id}/close")
+    public ResponseResult<?> close(@PathVariable Long id,
+                                   @RequestBody Map<String, Object> payload,
+                                   HttpServletRequest request) {
+        Long operatorId = getUserId(request);
+        if (!isAdmin(operatorId)) {
+            return ResponseResult.error(403, "无权限");
+        }
+        String resolution = payload.get("resolution") == null ? "客服已关闭工单" : String.valueOf(payload.get("resolution"));
+        return customerServiceCaseService.closeCase(id, operatorId, resolution);
     }
 }

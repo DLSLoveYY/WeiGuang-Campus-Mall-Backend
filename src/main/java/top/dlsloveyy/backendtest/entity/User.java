@@ -57,6 +57,12 @@ public class User {
     @Column(name = "dorm_building", length = 100)
     private String dormBuilding; // 宿舍楼栋/住址（例如：梅园1栋301，极大方便线下当面交易看货）
 
+    @Column(name = "profile_lng", precision = 10, scale = 6)
+    private BigDecimal profileLng;
+
+    @Column(name = "profile_lat", precision = 10, scale = 6)
+    private BigDecimal profileLat;
+
     @Column(name = "credit_score", nullable = false)
     private Integer creditScore = 100; // 默认信用分 100。未来可以做成：被举报/爽约扣分，交易成功加分
 

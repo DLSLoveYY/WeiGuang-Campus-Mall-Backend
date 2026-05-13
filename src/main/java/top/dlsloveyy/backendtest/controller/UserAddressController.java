@@ -63,4 +63,13 @@ public class UserAddressController {
         if (userId == null) return ResponseResult.error(401, "请先登录");
         return userAddressService.setDefault(userId, id);
     }
+
+    @GetMapping("/reverse-geocode")
+    public ResponseResult<?> reverseGeocode(@RequestParam("lng") Double longitude,
+                                            @RequestParam("lat") Double latitude,
+                                            HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return ResponseResult.error(401, "请先登录");
+        return userAddressService.reverseGeocode(userId, longitude, latitude);
+    }
 }

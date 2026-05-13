@@ -26,9 +26,18 @@ public interface CustomerServiceCaseService extends IService<CustomerServiceCase
                                  String detail,
                                  Integer priority);
 
+    ResponseResult<?> createUserRequest(Long buyerId,
+                                        Long orderId,
+                                        String category,
+                                        String title,
+                                        String detail,
+                                        Integer priority);
+
     ResponseResult<?> assignCase(Long caseId, Long adminId, Long operatorId);
 
     ResponseResult<?> resolveCase(Long caseId, Long operatorId, Integer decision, String resolution);
+
+    ResponseResult<?> closeCase(Long caseId, Long operatorId, String resolution);
 
     ResponseResult<List<CustomerServiceCase>> listCases(Integer status, Long assignedAdminId);
 

@@ -32,6 +32,8 @@ public class CustomerServiceCase {
 
     private String source;
 
+    private String requestTitle;
+
     private Long assignedAdminId;
 
     private String latestAction;

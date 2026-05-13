@@ -106,17 +106,19 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
                                         String source,
                                         String detail,
                                         Integer priority) {
-        CustomerServiceCase existed = getActiveCaseByDisputeId(disputeId);
-        if (existed != null) {
-            return ResponseResult.success("该争议已存在客服工单", existed.getId());
+        if (disputeId != null && disputeId > 0) {
+            CustomerServiceCase existed = getActiveCaseByDisputeId(disputeId);
+            if (existed != null) {
+                return ResponseResult.success("该争议已存在客服工单", existed.getId());
+            }
         }
 
         CustomerServiceCase csCase = new CustomerServiceCase();
         csCase.setCaseNo("CS" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 4).toUpperCase());
-        csCase.setOrderId(orderId);
-        csCase.setDisputeId(disputeId);
+        csCase.setOrderId(orderId == null ? 0L : orderId);
+        csCase.setDisputeId(disputeId == null ? 0L : disputeId);
         csCase.setBuyerId(buyerId);
-        csCase.setSellerId(sellerId);
+        csCase.setSellerId(sellerId == null ? 0L : sellerId);
         csCase.setSource(source);
         csCase.setPriority(priority == null ? 2 : priority);
         csCase.setStatus(PENDING_ASSIGN);
@@ -137,6 +139,53 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
         );
 
         return ResponseResult.success("已提交客服介入", csCase.getId());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseResult<?> createUserRequest(Long buyerId,
+                                               Long orderId,
+                                               String category,
+                                               String title,
+                                               String detail,
+                                               Integer priority) {
+        if (buyerId == null) {
+            return ResponseResult.error("请先登录");
+        }
+        if (title == null || title.trim().isEmpty()) {
+            return ResponseResult.error("请填写问题标题");
+        }
+        if (detail == null || detail.trim().isEmpty()) {
+            return ResponseResult.error("请填写问题描述");
+        }
+
+        CustomerServiceCase csCase = new CustomerServiceCase();
+        csCase.setCaseNo("REQ" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 4).toUpperCase());
+        csCase.setOrderId(orderId == null ? 0L : orderId);
+        csCase.setDisputeId(0L);
+        csCase.setBuyerId(buyerId);
+        csCase.setSellerId(0L);
+        csCase.setSource(category);
+        csCase.setRequestTitle(title.trim());
+        csCase.setPriority(priority == null ? 2 : priority);
+        csCase.setStatus(PENDING_ASSIGN);
+        csCase.setLatestAction("用户请求：" + title.trim());
+        csCase.setCreateTime(LocalDateTime.now());
+        csCase.setUpdateTime(LocalDateTime.now());
+        csCase.setSlaDeadlineTime(LocalDateTime.now().plusHours(24));
+        customerServiceCaseMapper.insert(csCase);
+
+        writeAction(csCase.getId(), buyerId, "USER", "REQUEST", detail, null);
+        operationAuditLogService.log(
+                buyerId,
+                "USER",
+                "CS_REQUEST_CREATED",
+                "CUSTOMER_SERVICE_CASE",
+                String.valueOf(csCase.getId()),
+                "category=" + category + ", title=" + title
+        );
+
+        return ResponseResult.success("已提交人工客服请求", csCase.getId());
     }
 
     @Override
@@ -175,7 +224,7 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
         if (csCase == null) {
             return ResponseResult.error("工单不存在");
         }
-        if (csCase.getDisputeId() == null) {
+        if (csCase.getDisputeId() == null || csCase.getDisputeId() <= 0) {
             return ResponseResult.error("工单未关联争议单");
         }
 
@@ -259,6 +308,35 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
                 "resolution=" + resolution + ", decision=" + decision
         );
         return ResponseResult.success("工单已处理完成");
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseResult<?> closeCase(Long caseId, Long operatorId, String resolution) {
+        CustomerServiceCase csCase = customerServiceCaseMapper.selectById(caseId);
+        if (csCase == null) {
+            return ResponseResult.error("工单不存在");
+        }
+        if (csCase.getStatus() == RESOLVED || csCase.getStatus() == top.dlsloveyy.backendtest.constant.CustomerServiceCaseStatus.CLOSED) {
+            return ResponseResult.error("工单已结案");
+        }
+
+        csCase.setStatus(top.dlsloveyy.backendtest.constant.CustomerServiceCaseStatus.CLOSED);
+        csCase.setLatestAction(resolution == null || resolution.isBlank() ? "客服已关闭工单" : resolution.trim());
+        csCase.setUpdateTime(LocalDateTime.now());
+        csCase.setCloseTime(LocalDateTime.now());
+        customerServiceCaseMapper.updateById(csCase);
+
+        writeAction(caseId, operatorId, "ADMIN", "CLOSE", resolution, null);
+        operationAuditLogService.log(
+                operatorId,
+                "ADMIN",
+                "CS_CASE_CLOSED",
+                "CUSTOMER_SERVICE_CASE",
+                String.valueOf(caseId),
+                "resolution=" + resolution
+        );
+        return ResponseResult.success("工单已关闭");
     }
 
     @Override

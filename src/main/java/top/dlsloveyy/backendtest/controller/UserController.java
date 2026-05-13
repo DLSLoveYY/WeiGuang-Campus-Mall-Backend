@@ -140,6 +140,8 @@ public class UserController {
         result.put("contactPhone", user.getContactPhone());
         result.put("wechatId", user.getWechatId());
         result.put("dormBuilding", user.getDormBuilding());
+        result.put("profileLng", user.getProfileLng());
+        result.put("profileLat", user.getProfileLat());
         result.put("creditScore", user.getCreditScore());
         result.put("balance", user.getBalance()); // 这里直接返回 BigDecimal 对象，JSON 序列化会自动处理
         result.put("frozenBalance", user.getFrozenBalance());
@@ -172,6 +174,8 @@ public class UserController {
         String contactPhone = (String) updateData.get("contactPhone");
         String wechatId = (String) updateData.get("wechatId");
         String dormBuilding = (String) updateData.get("dormBuilding");
+        BigDecimal profileLng = updateData.get("profileLng") != null ? new BigDecimal(updateData.get("profileLng").toString()) : null;
+        BigDecimal profileLat = updateData.get("profileLat") != null ? new BigDecimal(updateData.get("profileLat").toString()) : null;
 
         if (newUsername != null && !newUsername.equals(user.getUsername())) {
             LambdaQueryWrapper<User> checkWrapper = new LambdaQueryWrapper<>();
@@ -192,6 +196,8 @@ public class UserController {
         if (contactPhone != null) user.setContactPhone(contactPhone);
         if (wechatId != null) user.setWechatId(wechatId);
         if (dormBuilding != null) user.setDormBuilding(dormBuilding);
+        user.setProfileLng(profileLng);
+        user.setProfileLat(profileLat);
 
         userMapper.updateById(user);
         return ResponseEntity.ok("更新成功");
@@ -289,7 +295,7 @@ public class UserController {
         return ResponseEntity.ok(result);
     }
 
-    // ✅ 获取指定卖家的在售商品
+    // ✅ 获取指定卖家的公开闲置（在售 + 已售出）
     @GetMapping("/public-goods/{id}")
     public ResponseEntity<?> getPublicGoods(@PathVariable Long id) {
         User user = userMapper.selectById(id);
@@ -299,7 +305,7 @@ public class UserController {
 
         List<Goods> goodsList = goodsMapper.selectList(new LambdaQueryWrapper<Goods>()
                 .eq(Goods::getSellerId, id)
-                .eq(Goods::getStatus, 1)
+                .in(Goods::getStatus, List.of(1, 3))
                 .orderByDesc(Goods::getCreateTime));
 
         return ResponseEntity.ok(goodsList);
