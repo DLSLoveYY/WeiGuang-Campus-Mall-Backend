@@ -20,4 +20,12 @@ public class OrderTimeoutTask {
             log.info("Closed expired pending orders count={}", closedCount);
         }
     }
+
+    @Scheduled(cron = "0 */5 * * * ?")
+    public void autoConfirmMeetupOrders() {
+        int confirmedCount = tradeOrderService.autoConfirmMeetupOrders();
+        if (confirmedCount > 0) {
+            log.info("Auto confirmed meetup orders count={}", confirmedCount);
+        }
+    }
 }

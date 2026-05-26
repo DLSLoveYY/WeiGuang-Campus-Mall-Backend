@@ -67,6 +67,8 @@ public class UserAddressServiceImpl implements UserAddressService {
             return validation;
         }
 
+        fillCoordinatesIfMissing(address);
+
         Integer isDefault = parseIsDefault(payload);
         address.setIsDefault(isDefault);
         address.setCreateTime(LocalDateTime.now());
@@ -87,6 +89,13 @@ public class UserAddressServiceImpl implements UserAddressService {
         if (existed == null || !userId.equals(existed.getUserId())) {
             return ResponseResult.error(404, "地址不存在");
         }
+
+        String previousProvince = existed.getProvince();
+        String previousCity = existed.getCity();
+        String previousDistrict = existed.getDistrict();
+        String previousDetail = existed.getDetail();
+        BigDecimal previousLongitude = existed.getLongitude();
+        BigDecimal previousLatitude = existed.getLatitude();
 
         String receiverName = readString(payload, "receiverName");
         String receiverPhone = readString(payload, "receiverPhone", "contactPhone");
@@ -113,6 +122,18 @@ public class UserAddressServiceImpl implements UserAddressService {
         if (validation != null) {
             return validation;
         }
+
+        boolean addressChanged = !sameText(previousProvince, existed.getProvince())
+                || !sameText(previousCity, existed.getCity())
+                || !sameText(previousDistrict, existed.getDistrict())
+                || !sameText(previousDetail, existed.getDetail());
+        boolean coordinatesStillSame = sameBigDecimal(previousLongitude, existed.getLongitude())
+                && sameBigDecimal(previousLatitude, existed.getLatitude());
+        if (addressChanged && coordinatesStillSame) {
+            existed.setLongitude(null);
+            existed.setLatitude(null);
+        }
+        fillCoordinatesIfMissing(existed);
 
         Integer isDefault = payload.get("isDefault") == null ? existed.getIsDefault() : parseIsDefault(payload);
         existed.setIsDefault(isDefault);
@@ -241,6 +262,157 @@ public class UserAddressServiceImpl implements UserAddressService {
         } catch (IOException e) {
             return ResponseResult.error(502, "地图服务调用失败");
         }
+    }
+
+    @Override
+    public Map<String, Object> geocodeStructuredAddress(String province, String city, String district, String detail) {
+        String addressText = buildStructuredAddressText(province, city, district, detail);
+        if (addressText.isBlank()) {
+            return Map.of();
+        }
+        return geocodeAddress(addressText, normalizeCity(province, city));
+    }
+
+    @Override
+    public Map<String, Object> geocodeTextAddress(String addressText) {
+        if (addressText == null || addressText.isBlank()) {
+            return Map.of();
+        }
+        return geocodeAddress(addressText.trim(), null);
+    }
+
+    private void fillCoordinatesIfMissing(UserAddress address) {
+        if (address == null || hasCoordinates(address.getLongitude(), address.getLatitude())) {
+            return;
+        }
+        Map<String, Object> geo = geocodeStructuredAddress(address.getProvince(), address.getCity(), address.getDistrict(), address.getDetail());
+        BigDecimal longitude = toBigDecimal(geo.get("longitude"));
+        BigDecimal latitude = toBigDecimal(geo.get("latitude"));
+        if (longitude != null && latitude != null) {
+            address.setLongitude(longitude);
+            address.setLatitude(latitude);
+        }
+    }
+
+    private Map<String, Object> geocodeAddress(String addressText, String cityHint) {
+        if (addressText == null || addressText.isBlank()) {
+            return Map.of();
+        }
+        if (amapWebServiceKey == null || amapWebServiceKey.isBlank()) {
+            return Map.of();
+        }
+
+        try {
+            UriComponentsBuilder builder = UriComponentsBuilder
+                    .fromUriString("https://restapi.amap.com/v3/geocode/geo")
+                    .queryParam("key", amapWebServiceKey)
+                    .queryParam("address", addressText.trim());
+            if (cityHint != null && !cityHint.isBlank()) {
+                builder.queryParam("city", cityHint.trim());
+            }
+
+            HttpRequest request = HttpRequest.newBuilder(builder.build().encode().toUri()).GET().build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                return Map.of();
+            }
+
+            JsonNode root = objectMapper.readTree(response.body());
+            if (!"1".equals(root.path("status").asText())) {
+                return Map.of();
+            }
+
+            JsonNode first = root.path("geocodes").isArray() && !root.path("geocodes").isEmpty()
+                    ? root.path("geocodes").get(0)
+                    : null;
+            if (first == null || first.isMissingNode() || first.isNull()) {
+                return Map.of();
+            }
+
+            String location = safeText(first.path("location"));
+            if (location.isBlank() || !location.contains(",")) {
+                return Map.of();
+            }
+            String[] parts = location.split(",", 2);
+            BigDecimal longitude = toBigDecimal(parts[0]);
+            BigDecimal latitude = toBigDecimal(parts[1]);
+            if (longitude == null || latitude == null) {
+                return Map.of();
+            }
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("longitude", longitude);
+            result.put("latitude", latitude);
+            result.put("province", safeText(first.path("province")));
+            result.put("city", normalizeCity(safeText(first.path("province")), safeText(first.path("city"))));
+            result.put("district", safeText(first.path("district")));
+            result.put("formattedAddress", safeText(first.path("formatted_address")));
+            result.put("level", safeText(first.path("level")));
+            return result;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Map.of();
+        } catch (IOException e) {
+            return Map.of();
+        }
+    }
+
+    private boolean hasCoordinates(BigDecimal longitude, BigDecimal latitude) {
+        return longitude != null && latitude != null;
+    }
+
+    private String buildStructuredAddressText(String province, String city, String district, String detail) {
+        StringBuilder sb = new StringBuilder();
+        appendAddressPart(sb, province);
+        appendAddressPart(sb, city);
+        appendAddressPart(sb, district);
+        appendAddressPart(sb, detail);
+        return sb.toString().trim();
+    }
+
+    private void appendAddressPart(StringBuilder sb, String value) {
+        if (value == null) {
+            return;
+        }
+        String text = value.trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        if (sb.length() > 0) {
+            sb.append(' ');
+        }
+        sb.append(text);
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private boolean sameText(String left, String right) {
+        String a = left == null ? "" : left.trim();
+        String b = right == null ? "" : right.trim();
+        return a.equals(b);
+    }
+
+    private boolean sameBigDecimal(BigDecimal left, BigDecimal right) {
+        if (left == null && right == null) {
+            return true;
+        }
+        if (left == null || right == null) {
+            return false;
+        }
+        return left.compareTo(right) == 0;
     }
 
     private String safeText(JsonNode node) {

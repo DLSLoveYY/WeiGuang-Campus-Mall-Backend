@@ -12,6 +12,8 @@ public class OrderCreateDTO {
     @NotNull(message = "请选择交易方式")
     private String deliveryMethod; // 校园面交 / 邮寄
 
+    private Long variantId;
+
     private String deliveryAddress;
 
     private Long addressId;

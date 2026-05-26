@@ -17,4 +17,8 @@ public interface UserAddressService {
     ResponseResult<?> setDefault(Long userId, Long addressId);
 
     ResponseResult<?> reverseGeocode(Long userId, Double longitude, Double latitude);
+
+    Map<String, Object> geocodeStructuredAddress(String province, String city, String district, String detail);
+
+    Map<String, Object> geocodeTextAddress(String addressText);
 }

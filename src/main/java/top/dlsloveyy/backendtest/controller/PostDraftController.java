@@ -1,12 +1,15 @@
 package top.dlsloveyy.backendtest.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import top.dlsloveyy.backendtest.entity.GoodsDraft;
+import top.dlsloveyy.backendtest.entity.GoodsVariant;
 import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.mapper.GoodsDraftMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
@@ -27,6 +30,8 @@ public class PostDraftController {
     private final UserMapper userMapper;
 
     private final JwtUtil jwtUtil;
+
+    private final ObjectMapper objectMapper;
 
     // ✅ 保存商品草稿
     @PostMapping("/save")
@@ -61,6 +66,27 @@ public class PostDraftController {
         draftPayload.setSellerId(user.getId());
         draftPayload.setId(null); // 设为 null 确保是新增
         draftPayload.setCreateTime(LocalDateTime.now());
+        if ((draftPayload.getImages() == null || draftPayload.getImages().isBlank()) && draftPayload.getCoverImg() != null && !draftPayload.getCoverImg().isBlank()) {
+            draftPayload.setImages(draftPayload.getCoverImg());
+        }
+        if ((draftPayload.getCoverImg() == null || draftPayload.getCoverImg().isBlank()) && draftPayload.getImages() != null && !draftPayload.getImages().isBlank()) {
+            draftPayload.setCoverImg(draftPayload.getImages().split(",")[0].trim());
+        }
+        if ((draftPayload.getDeliveryMethods() == null || draftPayload.getDeliveryMethods().isBlank()) && draftPayload.getDeliveryType() != null) {
+            draftPayload.setDeliveryMethods(draftPayload.getDeliveryType());
+        }
+        if ((draftPayload.getDeliveryType() == null || draftPayload.getDeliveryType().isBlank()) && draftPayload.getDeliveryMethods() != null && !draftPayload.getDeliveryMethods().isBlank()) {
+            draftPayload.setDeliveryType(draftPayload.getDeliveryMethods().split(",")[0].trim());
+        }
+        if (draftPayload.getVariants() != null) {
+            try {
+                draftPayload.setVariantsJson(objectMapper.writeValueAsString(draftPayload.getVariants()));
+            } catch (Exception e) {
+                return ResponseEntity.ok(Map.of("code", 5, "message", "规格草稿序列化失败"));
+            }
+        } else {
+            draftPayload.setVariantsJson(null);
+        }
 
         goodsDraftMapper.insert(draftPayload);
 
@@ -102,6 +128,13 @@ public class PostDraftController {
         }
 
         GoodsDraft latest = drafts.get(0);
+        if (latest.getVariantsJson() != null && !latest.getVariantsJson().isBlank()) {
+            try {
+                latest.setVariants(objectMapper.readValue(latest.getVariantsJson(), new TypeReference<List<GoodsVariant>>() {}));
+            } catch (Exception e) {
+                latest.setVariants(List.of());
+            }
+        }
 
         return ResponseEntity.ok(Map.of(
                 "code", 0,

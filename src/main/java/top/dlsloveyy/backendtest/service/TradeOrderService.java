@@ -83,4 +83,6 @@ public interface TradeOrderService extends IService<TradeOrder> {
     ResponseResult<?> getLogisticsTrace(Long orderId, Long userId);
 
     int closeExpiredPendingOrders();
+
+    int autoConfirmMeetupOrders();
 }

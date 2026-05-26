@@ -60,27 +60,38 @@ public class AiService {
      * 便捷入口：只传 system / user 文本即可。
      */
     public String chat(String systemPrompt, String userPrompt) {
+        return chat(systemPrompt, userPrompt, null, null);
+    }
+
+    public String chat(String systemPrompt, String userPrompt, Integer maxTokensOverride, Double temperatureOverride) {
         List<Map<String, String>> messages = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             messages.add(Map.of("role", "system", "content", systemPrompt));
         }
         messages.add(Map.of("role", "user", "content", userPrompt == null ? "" : userPrompt));
-        return chat(messages);
+        return chat(messages, maxTokensOverride, temperatureOverride);
     }
 
     /**
      * 多轮对话入口：messages 中每个元素含 role / content。
      */
     public String chat(List<Map<String, String>> messages) {
+        return chat(messages, null, null);
+    }
+
+    public String chat(List<Map<String, String>> messages, Integer maxTokensOverride, Double temperatureOverride) {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("AI API Key 未配置");
         }
         try {
+            int resolvedMaxTokens = maxTokensOverride != null && maxTokensOverride > 0 ? maxTokensOverride : maxTokens;
+            double resolvedTemperature = temperatureOverride != null ? temperatureOverride : temperature;
+
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("model", model);
             body.put("messages", messages);
-            body.put("temperature", temperature);
-            body.put("max_tokens", maxTokens);
+            body.put("temperature", resolvedTemperature);
+            body.put("max_tokens", resolvedMaxTokens);
 
             String payload = mapper.writeValueAsString(body);
 

@@ -7,6 +7,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @TableName("goods_draft")
@@ -22,7 +23,16 @@ public class GoodsDraft {
     private BigDecimal originalPrice;
     private String category;
     private String deliveryType; // 兼容前端字段名
+    private String deliveryMethods;
     private String coverImg; // 兼容前端字段名
+    private String images;
+    private Integer stock;
+    private String conditionLevel;
+    private String tradeAddress;
+    private String variantsJson;
+
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    private List<GoodsVariant> variants;
 
     private LocalDateTime createTime;
 }

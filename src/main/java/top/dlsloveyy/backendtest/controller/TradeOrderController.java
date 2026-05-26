@@ -163,6 +163,12 @@ public class TradeOrderController {
         return tradeOrderService.approveRefund(id, sellerId, approvedAmount);
     }
 
+    @PutMapping("/refund/reject/{id}")
+    public ResponseResult<?> rejectRefund(@PathVariable Long id, HttpServletRequest request) {
+        Long sellerId = getUserId(request);
+        if (sellerId == null) return ResponseResult.error(401, "请先登录");
+        return tradeOrderService.rejectRefund(id, sellerId);
+    }
 
     @PutMapping("/refund/return-tracking/{id}")
     public ResponseResult<?> submitReturnTracking(@PathVariable Long id,

@@ -64,6 +64,21 @@ public class UserAddressController {
         return userAddressService.setDefault(userId, id);
     }
 
+    @GetMapping("/geocode")
+    public ResponseResult<?> geocode(@RequestParam("address") String address,
+                                     HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return ResponseResult.error(401, "请先登录");
+        if (address == null || address.isBlank()) return ResponseResult.error(400, "地址不能为空");
+        Map<String, Object> data = userAddressService.geocodeTextAddress(address);
+        Object longitude = data.get("longitude");
+        Object latitude = data.get("latitude");
+        if (longitude == null || latitude == null) {
+            return ResponseResult.error(404, "未找到匹配地址，请补充更精确的省市区和详细地址");
+        }
+        return ResponseResult.success("地址解析成功", data);
+    }
+
     @GetMapping("/reverse-geocode")
     public ResponseResult<?> reverseGeocode(@RequestParam("lng") Double longitude,
                                             @RequestParam("lat") Double latitude,

@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import top.dlsloveyy.backendtest.entity.CustomerServiceCase;
 import top.dlsloveyy.backendtest.entity.FreightTemplate;
 import top.dlsloveyy.backendtest.entity.Goods;
+import top.dlsloveyy.backendtest.entity.GoodsVariant;
 import top.dlsloveyy.backendtest.entity.TradeDispute;
 import top.dlsloveyy.backendtest.entity.TradeLogisticsTrace;
 import top.dlsloveyy.backendtest.entity.TradeOrder;
@@ -18,6 +19,7 @@ import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.entity.UserAddress;
 import top.dlsloveyy.backendtest.mapper.FreightTemplateMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsMapper;
+import top.dlsloveyy.backendtest.mapper.GoodsVariantMapper;
 import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
 import top.dlsloveyy.backendtest.mapper.TradeLogisticsTraceMapper;
 import top.dlsloveyy.backendtest.mapper.TradeShipmentMapper;
@@ -59,6 +61,9 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
 
     @Autowired
     private GoodsMapper goodsMapper;
+
+    @Autowired
+    private GoodsVariantMapper goodsVariantMapper;
 
     @Autowired
     private TradeOrderMapper tradeOrderMapper;
@@ -130,6 +135,20 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                 return ResponseResult.error("不能购买自己发布的商品哦！");
             }
 
+            GoodsVariant selectedVariant = null;
+            if (dto.getVariantId() != null) {
+                selectedVariant = goodsVariantMapper.selectById(dto.getVariantId());
+                if (selectedVariant == null || !goodsId.equals(selectedVariant.getGoodsId())) {
+                    return ResponseResult.error("所选商品规格不存在");
+                }
+                if (!Boolean.TRUE.equals(selectedVariant.getEnabled())) {
+                    return ResponseResult.error("所选商品规格已不可购买");
+                }
+                if (selectedVariant.getStock() == null || selectedVariant.getStock() <= 0) {
+                    return ResponseResult.error("该规格已售罄，请选择其他规格");
+                }
+            }
+
             String deliveryMethod;
             try {
                 deliveryMethod = normalizeDeliveryMethod(dto.getDeliveryMethod());
@@ -167,7 +186,7 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                 deliveryAddress = meetupAddress;
             }
 
-            BigDecimal goodsPrice = goods.getPrice();
+            BigDecimal goodsPrice = selectedVariant != null ? selectedVariant.getPrice() : goods.getPrice();
             if (goodsPrice == null || goodsPrice.compareTo(BigDecimal.ZERO) <= 0) {
                 return ResponseResult.error("商品价格异常，暂时无法下单");
             }
@@ -182,6 +201,11 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             order.setBuyerId(currentUserId);
             order.setSellerId(goods.getSellerId());
             order.setGoodsId(goodsId);
+            order.setVariantId(selectedVariant != null ? selectedVariant.getId() : null);
+            order.setVariantNameSnapshot(selectedVariant != null ? selectedVariant.getVariantName() : null);
+            order.setVariantOptionSnapshot(selectedVariant != null ? selectedVariant.getOptionName() : null);
+            order.setVariantDescriptionSnapshot(selectedVariant != null ? selectedVariant.getDescription() : null);
+            order.setUnitPriceSnapshot(goodsPrice);
             order.setOrderPrice(payAmount);
             order.setFreightFee(freightFee);
             order.setPlatformFee(platformFee);
@@ -202,10 +226,10 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                     "ORDER_CREATED",
                     "TRADE_ORDER",
                     String.valueOf(order.getId()),
-                    "goodsId=" + goodsId + ", status=" + PENDING_PAYMENT + ", freightFee=" + freightFee
+                    "goodsId=" + goodsId + ", variantId=" + (selectedVariant == null ? "null" : selectedVariant.getId()) + ", status=" + PENDING_PAYMENT + ", freightFee=" + freightFee
             );
 
-                userNotificationService.notifyUser(
+            userNotificationService.notifyUser(
                     order.getSellerId(),
                     "ORDER_CREATED",
                     "您有一笔新订单",
@@ -213,12 +237,19 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                     "TRADE_ORDER",
                     order.getId());
 
-            int newStock = (goods.getStock() == null ? 0 : goods.getStock() - 1);
-            goods.setStock(newStock);
-            if (newStock <= 0) {
-                goods.setStatus(3);
+            if (selectedVariant != null) {
+                selectedVariant.setStock(Math.max(0, (selectedVariant.getStock() == null ? 0 : selectedVariant.getStock()) - 1));
+                selectedVariant.setUpdateTime(LocalDateTime.now());
+                goodsVariantMapper.updateById(selectedVariant);
+                syncGoodsStockFromVariants(goodsId);
+            } else {
+                int newStock = (goods.getStock() == null ? 0 : goods.getStock() - 1);
+                goods.setStock(newStock);
+                if (newStock <= 0) {
+                    goods.setStatus(3);
+                }
+                goodsMapper.updateById(goods);
             }
-            goodsMapper.updateById(goods);
 
             return ResponseResult.success("订单创建成功", order.getId());
 
@@ -236,7 +267,32 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
     @Override
     public ResponseResult<List<TradeOrderVO>> getMySales(Long sellerId) {
         List<TradeOrderVO> list = tradeOrderMapper.selectMySales(sellerId);
+        if (list != null) {
+            list.forEach(order -> {
+                if (order == null) {
+                    return;
+                }
+                if ("校园面交".equals(order.getDeliveryMethod())) {
+                    order.setMeetupPhone(maskPhone(order.getMeetupPhone()));
+                }
+            });
+        }
         return ResponseResult.success(list);
+    }
+
+    private String maskPhone(String phone) {
+        if (phone == null) {
+            return null;
+        }
+        String trimmed = phone.trim();
+        if (trimmed.length() <= 3) {
+            return trimmed;
+        }
+        StringBuilder masked = new StringBuilder(trimmed.substring(0, 3));
+        for (int i = 3; i < trimmed.length(); i++) {
+            masked.append('x');
+        }
+        return masked.toString();
     }
 
     // ==================== 支付核心逻辑 (双渠道) ====================
@@ -458,6 +514,10 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         if (order.getStatus() != SHIPPED_PENDING_RECEIPT) {
             return ResponseResult.error("订单当前状态无法确认收货");
         }
+        String deliveryMethod = order.getDeliveryMethod() == null ? "" : order.getDeliveryMethod().trim();
+        if ("校园面交".equals(deliveryMethod) && order.getHandoffConfirmTime() == null) {
+            return ResponseResult.error("卖家尚未确认面交，无法确认收货");
+        }
         
         // 🔧 修复 Bug #9：检查是否有部分退款
         if (order.getRefundStage() != null && order.getRefundStage() >= 6 && 
@@ -533,6 +593,9 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         
         // 🔧 修复 Bug #3：禁止重复申请退款
         if (order.getRefundStage() != null && order.getRefundStage() > 0) {
+            if (order.getRefundStage() == 7 && order.getStatus() == SHIPPED_PENDING_RECEIPT) {
+                return ResponseResult.error("卖家已拒绝退款，请申请客服介入");
+            }
             return ResponseResult.error("订单已有退款/退货记录，不能重复申请");
         }
         
@@ -582,7 +645,7 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             order.setStatus(REFUNDED);
             this.updateById(order);
 
-            restoreGoodsStock(order.getGoodsId());
+            restoreGoodsStock(order);
             executeRefund(order, normalizedRequestedAmount, "ORDER_REFUND_DIRECT", "发货前仅退款");
 
             userNotificationService.notifyUser(
@@ -696,7 +759,7 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         this.updateById(order);
 
         if (order.getStatus() == REFUNDED && order.getDeliveryTime() == null) {
-            restoreGoodsStock(order.getGoodsId());
+            restoreGoodsStock(order);
         }
 
         executeRefund(order, finalApprovedAmount, "ORDER_REFUND_APPROVED", "卖家同意退款");
@@ -754,7 +817,7 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
 
         // 🔧 修复 Bug #2：拒绝退款时恢复库存
         if (order.getRefundType() != null && order.getRefundType() == 1 && order.getStatus() == PAID_PENDING_SHIPMENT) {
-            restoreGoodsStock(order.getGoodsId());
+            restoreGoodsStock(order);
         }
 
         TradeDispute activeDispute = tradeDisputeService.getOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<TradeDispute>()
@@ -851,7 +914,7 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
 
         // 🔧 修复 Bug #1：完整退货退款时恢复库存
         if (fullRefund) {
-            restoreGoodsStock(order.getGoodsId());
+            restoreGoodsStock(order);
         }
 
         executeRefund(order, finalApprovedAmount, "ORDER_RETURN_REFUND_CONFIRMED", "卖家确认收货后退款");
@@ -964,7 +1027,7 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
                 continue;
             }
 
-            restoreGoodsStock(order.getGoodsId());
+            restoreGoodsStock(order);
                 userNotificationService.notifyUser(
                     order.getBuyerId(),
                     "ORDER_TIMEOUT_CLOSED",
@@ -990,6 +1053,86 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             closedCount++;
         }
         return closedCount;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int autoConfirmMeetupOrders() {
+        LocalDateTime deadline = LocalDateTime.now().minusDays(3);
+        List<TradeOrder> candidates = this.lambdaQuery()
+                .eq(TradeOrder::getStatus, SHIPPED_PENDING_RECEIPT)
+                .eq(TradeOrder::getDeliveryMethod, "校园面交")
+                .isNotNull(TradeOrder::getHandoffConfirmTime)
+                .le(TradeOrder::getHandoffConfirmTime, deadline)
+                .list();
+
+        int confirmedCount = 0;
+        for (TradeOrder order : candidates) {
+            if (!canAutoConfirmMeetup(order)) {
+                continue;
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+            order.setStatus(COMPLETED);
+            order.setUpdateTime(now);
+            order.setFinishTime(now);
+            this.updateById(order);
+
+            BigDecimal escrowAmount = resolveEscrowAmount(order);
+            if (escrowAmount != null && escrowAmount.compareTo(BigDecimal.ZERO) > 0) {
+                accountService.unfreeze(
+                        order.getSellerId(),
+                        escrowAmount,
+                        "ORDER_SETTLE_UNFROZEN",
+                        String.valueOf(order.getId()),
+                        "ORDER_SETTLE_UNFROZEN:" + order.getId() + ":" + order.getSellerId(),
+                        "校园面交超时自动确认收货，解冻卖家金额"
+                );
+            }
+
+            userNotificationService.notifyUser(
+                    order.getBuyerId(),
+                    "ORDER_AUTO_RECEIVED",
+                    "订单已自动确认收货",
+                    "校园面交订单超过3天未确认，系统已自动确认收货。",
+                    "TRADE_ORDER",
+                    order.getId());
+            userNotificationService.notifyUser(
+                    order.getSellerId(),
+                    "ORDER_AUTO_RECEIVED",
+                    "订单已自动确认收货",
+                    "校园面交订单已自动确认收货，款项将结算至账户。",
+                    "TRADE_ORDER",
+                    order.getId());
+
+            operationAuditLogService.log(
+                    order.getBuyerId(),
+                    "SYSTEM",
+                    "ORDER_AUTO_RECEIVED_MEETUP_TIMEOUT",
+                    "TRADE_ORDER",
+                    String.valueOf(order.getId()),
+                    "status=" + COMPLETED + ", handoffConfirmTime=" + order.getHandoffConfirmTime()
+            );
+
+            confirmedCount++;
+        }
+        return confirmedCount;
+    }
+
+    private boolean canAutoConfirmMeetup(TradeOrder order) {
+        if (order == null) {
+            return false;
+        }
+        Integer refundStage = order.getRefundStage();
+        if (refundStage != null && refundStage > 0 && refundStage != 7) {
+            return false;
+        }
+        if (order.getRefundStage() != null && order.getRefundStage() >= 6
+                && order.getRefundApprovedAmount() != null
+                && order.getRefundApprovedAmount().compareTo(order.getOrderPrice()) < 0) {
+            return false;
+        }
+        return true;
     }
 
     private void executeRefund(TradeOrder order,
@@ -1054,7 +1197,8 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         packet.put("buyerEvidence", buyerEvidence);
         packet.put("deliveryMethod", order.getDeliveryMethod());
         packet.put("deliveryAddress", order.getDeliveryAddress());
-        packet.put("applyTime", applyTime == null ? LocalDateTime.now() : applyTime);
+        LocalDateTime safeTime = applyTime == null ? LocalDateTime.now() : applyTime;
+        packet.put("applyTime", safeTime.toString());
         try {
             return objectMapper.writeValueAsString(packet);
         } catch (JsonProcessingException e) {
@@ -1205,8 +1349,22 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
         return baseFee.add(extraFee).setScale(2, RoundingMode.HALF_UP);
     }
 
-    private void restoreGoodsStock(Long goodsId) {
-        Goods goods = goodsMapper.selectById(goodsId);
+    private void restoreGoodsStock(TradeOrder order) {
+        if (order == null || order.getGoodsId() == null) {
+            return;
+        }
+        if (order.getVariantId() != null) {
+            GoodsVariant variant = goodsVariantMapper.selectById(order.getVariantId());
+            if (variant != null) {
+                int currentStock = variant.getStock() == null ? 0 : variant.getStock();
+                variant.setStock(currentStock + 1);
+                variant.setUpdateTime(LocalDateTime.now());
+                goodsVariantMapper.updateById(variant);
+                syncGoodsStockFromVariants(order.getGoodsId());
+                return;
+            }
+        }
+        Goods goods = goodsMapper.selectById(order.getGoodsId());
         if (goods != null) {
             int currentStock = goods.getStock() == null ? 0 : goods.getStock();
             goods.setStock(currentStock + 1);
@@ -1215,5 +1373,29 @@ public class TradeOrderServiceImpl extends ServiceImpl<TradeOrderMapper, TradeOr
             }
             goodsMapper.updateById(goods);
         }
+    }
+
+    private void syncGoodsStockFromVariants(Long goodsId) {
+        if (goodsId == null) {
+            return;
+        }
+        Goods goods = goodsMapper.selectById(goodsId);
+        if (goods == null) {
+            return;
+        }
+        List<GoodsVariant> variants = goodsVariantMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<GoodsVariant>()
+                .eq(GoodsVariant::getGoodsId, goodsId)
+                .eq(GoodsVariant::getEnabled, true));
+        if (variants.isEmpty()) {
+            return;
+        }
+        int totalStock = variants.stream().map(GoodsVariant::getStock).filter(java.util.Objects::nonNull).mapToInt(Integer::intValue).sum();
+        BigDecimal minPrice = variants.stream().map(GoodsVariant::getPrice).filter(java.util.Objects::nonNull).min(BigDecimal::compareTo).orElse(goods.getPrice());
+        BigDecimal minOriginalPrice = variants.stream().map(GoodsVariant::getOriginalPrice).filter(java.util.Objects::nonNull).min(BigDecimal::compareTo).orElse(goods.getOriginalPrice());
+        goods.setStock(totalStock);
+        goods.setPrice(minPrice);
+        goods.setOriginalPrice(minOriginalPrice);
+        goods.setStatus(totalStock > 0 ? 1 : 3);
+        goodsMapper.updateById(goods);
     }
 }

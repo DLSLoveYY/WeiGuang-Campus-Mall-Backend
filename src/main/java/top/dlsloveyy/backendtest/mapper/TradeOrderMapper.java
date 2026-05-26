@@ -8,6 +8,7 @@ import top.dlsloveyy.backendtest.entity.TradeOrder;
 import top.dlsloveyy.backendtest.model.vo.TradeOrderVO;
 
 import java.util.List;
+import java.util.Map;
 
 @Mapper
 public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
@@ -25,5 +26,8 @@ public interface TradeOrderMapper extends BaseMapper<TradeOrder> {
             "WHERE o.seller_id = #{userId} " +
             "ORDER BY o.create_time DESC")
     List<TradeOrderVO> selectMySales(@Param("userId") Long userId);
+
+        @Select("SELECT goods_id as goodsId, COUNT(*) as orderCount FROM trade_order GROUP BY goods_id")
+        List<Map<String, Object>> selectOrderCountsByGoods();
 
 }

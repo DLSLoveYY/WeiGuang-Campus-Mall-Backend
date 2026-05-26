@@ -8,16 +8,21 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import top.dlsloveyy.backendtest.entity.Goods;
 import top.dlsloveyy.backendtest.entity.GoodsFavorite;
+import top.dlsloveyy.backendtest.entity.GoodsVariant;
 import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.mapper.GoodsDraftMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsFavoriteMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsMapper;
+import top.dlsloveyy.backendtest.mapper.GoodsVariantMapper;
+import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
-import top.dlsloveyy.backendtest.util.JwtUtil;
 import top.dlsloveyy.backendtest.service.AuditService;
+import top.dlsloveyy.backendtest.service.UserAddressService;
+import top.dlsloveyy.backendtest.util.JwtUtil;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -35,9 +40,15 @@ public class GoodsController {
     @Autowired
     private GoodsDraftMapper goodsDraftMapper;
     @Autowired
+    private GoodsVariantMapper goodsVariantMapper;
+    @Autowired
     private JwtUtil jwtUtil;
     @Autowired
     private AuditService auditService;
+    @Autowired
+    private UserAddressService userAddressService;
+    @Autowired
+    private TradeOrderMapper tradeOrderMapper;
 
     // ==========================================
     // 1. 发布商品 (完美融合：敏感词检测 + 自动/人工审核分流)
@@ -66,6 +77,8 @@ public class GoodsController {
 
         try {
             normalizeGoodsDeliveryMethods(goods);
+            fillTradeCoordinatesIfNeeded(goods);
+            prepareGoodsForVariants(goods);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("code", 400, "message", e.getMessage()));
         }
@@ -76,6 +89,7 @@ public class GoodsController {
         if (hasSensitive) {
             goods.setStatus(0);
             goodsMapper.insert(goods);
+            saveGoodsVariants(goods);
             deleteLoadedDraft(user.getId(), draftId);
             return ResponseEntity.ok(Map.of(
                     "code", 200,
@@ -85,6 +99,7 @@ public class GoodsController {
         } else {
             goods.setStatus(1);
             goodsMapper.insert(goods);
+            saveGoodsVariants(goods);
             deleteLoadedDraft(user.getId(), draftId);
             return ResponseEntity.ok(Map.of("code", 200, "message", "商品发布成功，已自动上架！", "id", goods.getId()));
         }
@@ -123,6 +138,7 @@ public class GoodsController {
         original.setDescription(updatedGoods.getDescription());
         original.setPrice(updatedGoods.getPrice());
         original.setOriginalPrice(updatedGoods.getOriginalPrice());
+        original.setStock(updatedGoods.getStock());
         original.setCategory(updatedGoods.getCategory());
         original.setConditionLevel(updatedGoods.getConditionLevel());
         original.setDeliveryMethod(updatedGoods.getDeliveryMethod());
@@ -131,8 +147,11 @@ public class GoodsController {
         original.setTradeLng(updatedGoods.getTradeLng());
         original.setTradeLat(updatedGoods.getTradeLat());
         original.setTradeGeoSource(updatedGoods.getTradeGeoSource());
+        original.setVariants(updatedGoods.getVariants());
         try {
             normalizeGoodsDeliveryMethods(original);
+            fillTradeCoordinatesIfNeeded(original);
+            prepareGoodsForVariants(original);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("code", 400, "message", e.getMessage()));
         }
@@ -142,10 +161,12 @@ public class GoodsController {
         if (hasSensitive) {
             original.setStatus(0); // 再次进入待审核状态
             goodsMapper.updateById(original);
+            replaceGoodsVariants(original);
             return ResponseEntity.ok(Map.of("code", 200, "message", "修改内容存在敏感词，已重新提交人工审核"));
         } else {
             original.setStatus(1); // 重新上架
             goodsMapper.updateById(original);
+            replaceGoodsVariants(original);
             return ResponseEntity.ok(Map.of("code", 200, "message", "修改成功，商品已更新"));
         }
     }
@@ -169,7 +190,6 @@ public class GoodsController {
                                           @RequestParam(required = false) BigDecimal maxDistanceKm,
                                           @RequestParam(required = false, defaultValue = "asc") String distanceSort) {
         LambdaQueryWrapper<Goods> queryWrapper = new LambdaQueryWrapper<>();
-
         queryWrapper.eq(Goods::getStatus, 1);
 
         if (category != null && !category.isEmpty()) {
@@ -184,15 +204,33 @@ public class GoodsController {
                 queryWrapper.in(Goods::getConditionLevel, conditionLevels);
             }
         }
-        if (deliveryMethod != null && !deliveryMethod.isEmpty()) queryWrapper.like(Goods::getDeliveryMethods, deliveryMethod);
-        if (minPrice != null) queryWrapper.ge(Goods::getPrice, minPrice);
-        if (maxPrice != null) queryWrapper.le(Goods::getPrice, maxPrice);
-        if (keyword != null && !keyword.isEmpty()) queryWrapper.and(w -> w.like(Goods::getTitle, keyword).or().like(Goods::getDescription, keyword));
+        if (deliveryMethod != null && !deliveryMethod.isEmpty()) {
+            queryWrapper.like(Goods::getDeliveryMethods, deliveryMethod);
+        }
+        if (minPrice != null) {
+            queryWrapper.ge(Goods::getPrice, minPrice);
+        }
+        if (maxPrice != null) {
+            queryWrapper.le(Goods::getPrice, maxPrice);
+        }
 
+        String normalizedKeyword = normalizeQueryText(keyword);
         boolean enableNearby = "buyer_profile".equalsIgnoreCase(nearbyMode) || "custom_point".equalsIgnoreCase(nearbyMode);
         boolean hasReferencePoint = refLng != null && refLat != null;
 
-        List<Goods> matched = goodsMapper.selectList(queryWrapper);
+        List<Goods> baseGoods = new ArrayList<>(goodsMapper.selectList(queryWrapper));
+        attachSellerInfo(baseGoods);
+
+        Set<Long> sellerIdsByKeyword = Collections.emptySet();
+        List<Goods> matched = baseGoods;
+        if (normalizedKeyword != null) {
+            Set<Long> matchedSellerIds = findSellerIdsByUsernameLike(normalizedKeyword);
+            sellerIdsByKeyword = matchedSellerIds;
+            matched = baseGoods.stream()
+                    .filter(goods -> matchesBasicKeyword(goods, normalizedKeyword, matchedSellerIds))
+                    .toList();
+        }
+
         if (enableNearby && hasReferencePoint && "校园面交".equals(deliveryMethod)) {
             boolean hasAnyGeoGoods = matched.stream().anyMatch(item -> item.getTradeLng() != null && item.getTradeLat() != null);
             if (hasAnyGeoGoods) {
@@ -207,49 +245,37 @@ public class GoodsController {
                         })
                         .toList();
             }
+        } else if (normalizedKeyword != null && !normalizedKeyword.isBlank() && (sort == null || sort.isBlank() || "smart".equalsIgnoreCase(sort))) {
+            matched = matched.stream().sorted((a, b) -> Integer.compare(calculateSearchScore(b, normalizedKeyword), calculateSearchScore(a, normalizedKeyword))).toList();
+        } else if ("price_asc".equalsIgnoreCase(sort)) {
+            matched = matched.stream().sorted(Comparator.comparing(Goods::getPrice, Comparator.nullsLast(BigDecimal::compareTo))).toList();
+        } else if ("price_desc".equalsIgnoreCase(sort)) {
+            matched = matched.stream().sorted((a, b) -> {
+                BigDecimal pa = a.getPrice() == null ? BigDecimal.ZERO : a.getPrice();
+                BigDecimal pb = b.getPrice() == null ? BigDecimal.ZERO : b.getPrice();
+                return pb.compareTo(pa);
+            }).toList();
         } else {
-            if (keyword != null && !keyword.isBlank() && (sort == null || sort.isBlank() || "smart".equalsIgnoreCase(sort))) {
-                matched = matched.stream().sorted((a, b) -> Integer.compare(calculateSearchScore(b, keyword), calculateSearchScore(a, keyword))).toList();
-            } else if ("price_asc".equalsIgnoreCase(sort)) {
-                matched = matched.stream().sorted(Comparator.comparing(Goods::getPrice, Comparator.nullsLast(BigDecimal::compareTo))).toList();
-            } else if ("price_desc".equalsIgnoreCase(sort)) {
-                matched = matched.stream().sorted((a, b) -> {
-                    BigDecimal pa = a.getPrice() == null ? BigDecimal.ZERO : a.getPrice();
-                    BigDecimal pb = b.getPrice() == null ? BigDecimal.ZERO : b.getPrice();
-                    return pb.compareTo(pa);
-                }).toList();
-            } else {
-                matched = matched.stream().sorted(Comparator.comparing(Goods::getCreateTime, Comparator.nullsLast(LocalDateTime::compareTo)).reversed()).toList();
-            }
+            matched = matched.stream().sorted(Comparator.comparing(Goods::getCreateTime, Comparator.nullsLast(LocalDateTime::compareTo)).reversed()).toList();
         }
 
         long total = matched.size();
         int from = Math.min((page - 1) * size, matched.size());
         int to = Math.min(from + size, matched.size());
         List<Goods> records = new ArrayList<>(matched.subList(from, to));
-
-        if (!records.isEmpty()) {
-            Set<Long> sellerIds = records.stream().map(Goods::getSellerId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
-            if (!sellerIds.isEmpty()) {
-                List<User> sellers = userMapper.selectBatchIds(sellerIds);
-                Map<Long, User> sellerMap = sellers.stream().collect(java.util.stream.Collectors.toMap(User::getId, u -> u));
-                records.forEach(g -> {
-                    User seller = sellerMap.get(g.getSellerId());
-                    if (seller != null) {
-                        g.setSellerName(seller.getUsername());
-                        String avatar = seller.getAvatar();
-                        g.setSellerAvatar(avatar == null ? "" : avatar);
-                        g.setSellerCreditScore(seller.getCreditScore());
-                    }
-                    normalizeGoodsImages(g);
-                    if (g.getDistanceKm() != null) {
-                        g.setDistanceKm(g.getDistanceKm().setScale(2, RoundingMode.HALF_UP));
-                    }
-                });
+        records.forEach(g -> {
+            normalizeGoodsImages(g);
+            if (g.getDistanceKm() != null) {
+                g.setDistanceKm(g.getDistanceKm().setScale(2, RoundingMode.HALF_UP));
             }
-        }
+        });
 
-        return ResponseEntity.ok(Map.of("code", 200, "data", records, "total", total));
+        return ResponseEntity.ok(Map.of(
+                "code", 200,
+                "data", records,
+                "total", total,
+                "searchSellerMatched", !sellerIdsByKeyword.isEmpty()
+        ));
     }
 
     private int calculateSearchScore(Goods goods, String keyword) {
@@ -272,6 +298,70 @@ public class GoodsController {
         return score;
     }
 
+    private String normalizeQueryText(String keyword) {
+        if (keyword == null) {
+            return null;
+        }
+        String normalized = keyword.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private Map<Long, User> attachSellerInfo(List<Goods> goodsList) {
+        if (goodsList == null || goodsList.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Set<Long> sellerIds = goodsList.stream().map(Goods::getSellerId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        if (sellerIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<User> sellers = userMapper.selectBatchIds(sellerIds);
+        Map<Long, User> sellerMap = sellers.stream().collect(java.util.stream.Collectors.toMap(User::getId, u -> u));
+        goodsList.forEach(g -> {
+            User seller = sellerMap.get(g.getSellerId());
+            if (seller != null) {
+                g.setSellerName(seller.getUsername());
+                g.setSellerAvatar(seller.getAvatar() == null ? "" : seller.getAvatar());
+                g.setSellerCreditScore(seller.getCreditScore());
+            }
+        });
+        return sellerMap;
+    }
+
+    private Set<Long> findSellerIdsByUsernameLike(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return Collections.emptySet();
+        }
+        List<User> matchedUsers = userMapper.selectList(new LambdaQueryWrapper<User>().like(User::getUsername, keyword));
+        if (matchedUsers == null || matchedUsers.isEmpty()) {
+            return Collections.emptySet();
+        }
+        return matchedUsers.stream().map(User::getId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+    }
+
+    private boolean matchesBasicKeyword(Goods goods, String keyword, Set<Long> sellerIdsByKeyword) {
+        if (goods == null || keyword == null || keyword.isBlank()) {
+            return true;
+        }
+        String normalizedKeyword = keyword.toLowerCase();
+        if (containsIgnoreCase(goods.getTitle(), normalizedKeyword)) {
+            return true;
+        }
+        if (containsIgnoreCase(goods.getDescription(), normalizedKeyword)) {
+            return true;
+        }
+        if (containsIgnoreCase(goods.getSellerName(), normalizedKeyword)) {
+            return true;
+        }
+        return sellerIdsByKeyword != null && sellerIdsByKeyword.contains(goods.getSellerId());
+    }
+
+    private boolean containsIgnoreCase(String text, String keyword) {
+        if (text == null || keyword == null || keyword.isBlank()) {
+            return false;
+        }
+        return text.toLowerCase().contains(keyword.toLowerCase());
+    }
+
     // ==========================================
     // 4. 热度榜单 (融合了你的热度算法)
     // ==========================================
@@ -281,12 +371,27 @@ public class GoodsController {
         // 查出所有在售商品
         List<Goods> allActive = goodsMapper.selectList(new LambdaQueryWrapper<Goods>().eq(Goods::getStatus, 1));
 
-        // 计算热度：浏览量*1.2 + 收藏数*4
+        Map<Long, Integer> orderCountMap = new HashMap<>();
+        List<Map<String, Object>> orderCounts = tradeOrderMapper.selectOrderCountsByGoods();
+        if (orderCounts != null) {
+            for (Map<String, Object> row : orderCounts) {
+                Object goodsIdObj = row.get("goodsId");
+                Object countObj = row.get("orderCount");
+                if (goodsIdObj == null || countObj == null) {
+                    continue;
+                }
+                Long goodsId = Long.valueOf(String.valueOf(goodsIdObj));
+                Integer count = Integer.valueOf(String.valueOf(countObj));
+                orderCountMap.put(goodsId, count);
+            }
+        }
+
+        // HackerNews 热榜：score = (votes - 1) / (hours + 2)^1.5
         List<Goods> hotList = allActive.stream()
                 .peek(this::normalizeGoodsImages)
                 .sorted((a, b) -> Double.compare(
-                        (b.getViewCount() == null ? 0 : b.getViewCount()) * 1.2 + (b.getFavoritesCount() == null ? 0 : b.getFavoritesCount()) * 4.0,
-                        (a.getViewCount() == null ? 0 : a.getViewCount()) * 1.2 + (a.getFavoritesCount() == null ? 0 : a.getFavoritesCount()) * 4.0
+                        calculateHotScore(b, orderCountMap.getOrDefault(b.getId(), 0)),
+                        calculateHotScore(a, orderCountMap.getOrDefault(a.getId(), 0))
                 ))
                 .toList();
 
@@ -313,6 +418,21 @@ public class GoodsController {
         return ResponseEntity.ok(Map.of("code", 200, "data", pageList, "total", hotList.size()));
     }
 
+    private double calculateHotScore(Goods goods, int orderCount) {
+        if (goods == null) {
+            return 0;
+        }
+        int view = goods.getViewCount() == null ? 0 : goods.getViewCount();
+        int favorites = goods.getFavoritesCount() == null ? 0 : goods.getFavoritesCount();
+        int consult = goods.getCommentCount() == null ? 0 : goods.getCommentCount();
+        int orders = Math.max(0, orderCount);
+        int weighted = view + favorites * 2 + consult * 3 + orders * 4;
+        double votes = Math.max(1, weighted);
+        LocalDateTime createTime = goods.getCreateTime() == null ? LocalDateTime.now() : goods.getCreateTime();
+        double hours = Math.max(0.0, Duration.between(createTime, LocalDateTime.now()).toMinutes() / 60.0);
+        return (votes - 1) / Math.pow(hours + 2, 1.5);
+    }
+
     // ==========================================
     // 5. 详情与卖家信息聚合
     // ==========================================
@@ -325,6 +445,7 @@ public class GoodsController {
         // 增加浏览量
         goods.setViewCount(goods.getViewCount() + 1);
         goodsMapper.updateById(goods);
+        goods.setVariants(loadGoodsVariants(goods.getId()));
 
         Map<String, Object> result = new HashMap<>();
         result.put("goods", goods);
@@ -432,6 +553,134 @@ public class GoodsController {
         return ResponseEntity.ok(Map.of("code", 200, "data", goodsList));
     }
 
+    private void prepareGoodsForVariants(Goods goods) {
+        if (goods == null) {
+            return;
+        }
+        List<GoodsVariant> variants = sanitizeVariants(goods.getVariants());
+        goods.setVariants(variants);
+        if (variants.isEmpty()) {
+            if (goods.getStock() == null || goods.getStock() < 1) {
+                goods.setStock(1);
+            }
+            return;
+        }
+        BigDecimal minPrice = variants.stream().map(GoodsVariant::getPrice).filter(Objects::nonNull).min(BigDecimal::compareTo).orElse(goods.getPrice());
+        BigDecimal minOriginalPrice = variants.stream().map(GoodsVariant::getOriginalPrice).filter(Objects::nonNull).min(BigDecimal::compareTo).orElse(goods.getOriginalPrice());
+        int totalStock = variants.stream().map(GoodsVariant::getStock).filter(Objects::nonNull).mapToInt(Integer::intValue).sum();
+        goods.setPrice(minPrice);
+        goods.setOriginalPrice(minOriginalPrice);
+        goods.setStock(totalStock);
+    }
+
+    private List<GoodsVariant> sanitizeVariants(List<GoodsVariant> variants) {
+        if (variants == null || variants.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<GoodsVariant> sanitized = new ArrayList<>();
+        String sharedName = null;
+        int index = 0;
+        for (GoodsVariant variant : variants) {
+            if (variant == null) {
+                continue;
+            }
+            String optionName = variant.getOptionName() == null ? "" : variant.getOptionName().trim();
+            if (optionName.isEmpty()) {
+                continue;
+            }
+            if (variant.getPrice() == null || variant.getPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("规格选项价格必须大于 0");
+            }
+            Integer stock = variant.getStock() == null ? 0 : variant.getStock();
+            if (stock < 0) {
+                throw new IllegalArgumentException("规格选项库存不能小于 0");
+            }
+            String variantName = variant.getVariantName() == null ? "" : variant.getVariantName().trim();
+            if (sharedName == null && !variantName.isEmpty()) {
+                sharedName = variantName;
+            }
+            GoodsVariant sanitizedItem = new GoodsVariant();
+            sanitizedItem.setId(variant.getId());
+            sanitizedItem.setVariantName(sharedName == null || sharedName.isBlank() ? "商品规格" : sharedName);
+            sanitizedItem.setOptionName(optionName);
+            sanitizedItem.setPrice(variant.getPrice());
+            sanitizedItem.setOriginalPrice(variant.getOriginalPrice());
+            sanitizedItem.setStock(stock);
+            sanitizedItem.setDescription(variant.getDescription() == null ? "" : variant.getDescription().trim());
+            sanitizedItem.setSortOrder(variant.getSortOrder() == null ? index : variant.getSortOrder());
+            sanitizedItem.setEnabled(variant.getEnabled() == null ? Boolean.TRUE : variant.getEnabled());
+            sanitized.add(sanitizedItem);
+            index++;
+        }
+        if (!sanitized.isEmpty()) {
+            String finalName = sharedName == null || sharedName.isBlank() ? "商品规格" : sharedName;
+            sanitized.forEach(item -> item.setVariantName(finalName));
+        }
+        return sanitized;
+    }
+
+    private void saveGoodsVariants(Goods goods) {
+        if (goods == null || goods.getId() == null) {
+            return;
+        }
+        List<GoodsVariant> variants = goods.getVariants();
+        if (variants == null || variants.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        for (GoodsVariant variant : variants) {
+            variant.setId(null);
+            variant.setGoodsId(goods.getId());
+            variant.setCreateTime(now);
+            variant.setUpdateTime(now);
+            goodsVariantMapper.insert(variant);
+        }
+        syncGoodsAggregateFromVariants(goods.getId());
+    }
+
+    private void replaceGoodsVariants(Goods goods) {
+        if (goods == null || goods.getId() == null) {
+            return;
+        }
+        goodsVariantMapper.delete(new LambdaQueryWrapper<GoodsVariant>().eq(GoodsVariant::getGoodsId, goods.getId()));
+        saveGoodsVariants(goods);
+    }
+
+    private List<GoodsVariant> loadGoodsVariants(Long goodsId) {
+        if (goodsId == null) {
+            return List.of();
+        }
+        return goodsVariantMapper.selectList(new LambdaQueryWrapper<GoodsVariant>()
+                .eq(GoodsVariant::getGoodsId, goodsId)
+                .eq(GoodsVariant::getEnabled, true)
+                .orderByAsc(GoodsVariant::getSortOrder)
+                .orderByAsc(GoodsVariant::getId));
+    }
+
+    private void syncGoodsAggregateFromVariants(Long goodsId) {
+        if (goodsId == null) {
+            return;
+        }
+        Goods goods = goodsMapper.selectById(goodsId);
+        if (goods == null) {
+            return;
+        }
+        List<GoodsVariant> variants = loadGoodsVariants(goodsId);
+        if (variants.isEmpty()) {
+            return;
+        }
+        BigDecimal minPrice = variants.stream().map(GoodsVariant::getPrice).filter(Objects::nonNull).min(BigDecimal::compareTo).orElse(goods.getPrice());
+        BigDecimal minOriginalPrice = variants.stream().map(GoodsVariant::getOriginalPrice).filter(Objects::nonNull).min(BigDecimal::compareTo).orElse(goods.getOriginalPrice());
+        int totalStock = variants.stream().map(GoodsVariant::getStock).filter(Objects::nonNull).mapToInt(Integer::intValue).sum();
+        goods.setPrice(minPrice);
+        goods.setOriginalPrice(minOriginalPrice);
+        goods.setStock(totalStock);
+        if (goods.getStatus() != null && goods.getStatus() != 0) {
+            goods.setStatus(totalStock > 0 ? 1 : 3);
+        }
+        goodsMapper.updateById(goods);
+    }
+
     // ==========================================
     // 📌 Helper Method: 统一处理图片 URL
     // ==========================================
@@ -459,6 +708,60 @@ public class GoodsController {
                 * Math.sin(dLng / 2) * Math.sin(dLng / 2);
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return BigDecimal.valueOf(earthRadiusKm * c);
+    }
+
+    private void fillTradeCoordinatesIfNeeded(Goods goods) {
+        if (goods == null) {
+            return;
+        }
+        if (!containsDeliveryMethod(goods.getDeliveryMethods(), "校园面交")) {
+            goods.setTradeLng(null);
+            goods.setTradeLat(null);
+            goods.setTradeGeoSource(null);
+            return;
+        }
+        if (goods.getTradeLng() != null && goods.getTradeLat() != null) {
+            if (goods.getTradeGeoSource() == null || goods.getTradeGeoSource().isBlank()) {
+                goods.setTradeGeoSource("manual_geocode");
+            }
+            return;
+        }
+        String tradeAddress = goods.getTradeAddress() == null ? "" : goods.getTradeAddress().trim();
+        if (tradeAddress.isEmpty()) {
+            return;
+        }
+        Map<String, Object> geo = userAddressService.geocodeTextAddress(tradeAddress);
+        BigDecimal longitude = toBigDecimal(geo.get("longitude"));
+        BigDecimal latitude = toBigDecimal(geo.get("latitude"));
+        if (longitude != null && latitude != null) {
+            goods.setTradeLng(longitude);
+            goods.setTradeLat(latitude);
+            goods.setTradeGeoSource("manual_geocode");
+        }
+    }
+
+    private boolean containsDeliveryMethod(String deliveryMethods, String expected) {
+        if (deliveryMethods == null || deliveryMethods.isBlank()) {
+            return false;
+        }
+        return Arrays.stream(deliveryMethods.split(","))
+                .map(item -> item == null ? "" : item.trim())
+                .anyMatch(expected::equals);
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private void normalizeGoodsDeliveryMethods(Goods goods) {

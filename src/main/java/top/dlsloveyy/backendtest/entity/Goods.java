@@ -7,6 +7,7 @@ import jakarta.persistence.*;
 import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Entity
 @Data
@@ -100,6 +101,10 @@ public class Goods {
     @Transient
     @com.baomidou.mybatisplus.annotation.TableField(exist = false)
     private BigDecimal distanceKm;
+
+    @Transient
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    private List<GoodsVariant> variants;
 
     @PrePersist
     protected void onCreate() {

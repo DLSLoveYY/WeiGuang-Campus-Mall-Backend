@@ -60,6 +60,15 @@ public class CustomerServiceCaseController {
         return customerServiceCaseService.getCaseDetail(id, userId, isAdmin(userId));
     }
 
+    @GetMapping("/{id}/full-detail")
+    public ResponseResult<?> caseFullDetail(@PathVariable Long id, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) {
+            return ResponseResult.error(401, "请先登录");
+        }
+        return customerServiceCaseService.getCaseFullDetail(id, userId, isAdmin(userId));
+    }
+
     @GetMapping("/{id}/actions")
     public ResponseResult<?> caseActions(@PathVariable Long id, HttpServletRequest request) {
         Long userId = getUserId(request);
@@ -96,6 +105,7 @@ public class CustomerServiceCaseController {
         String category = payload.getOrDefault("category", "其他");
         String title = payload.get("title");
         String detail = payload.get("detail");
+        String attachments = payload.get("attachments");
         Long orderId = null;
         if (payload.get("orderId") != null && !payload.get("orderId").isBlank()) {
             try {
@@ -104,7 +114,7 @@ public class CustomerServiceCaseController {
                 return ResponseResult.error("订单ID格式不正确");
             }
         }
-        return customerServiceCaseService.createUserRequest(userId, orderId, category, title, detail, 2);
+        return customerServiceCaseService.createUserRequest(userId, orderId, category, title, detail, attachments, 2);
     }
 
     @GetMapping("/admin/list")

@@ -1,6 +1,7 @@
 package top.dlsloveyy.backendtest.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -45,4 +46,10 @@ public class CustomerServiceCase {
     private LocalDateTime updateTime;
 
     private LocalDateTime closeTime;
+
+    @TableField(exist = false)
+    private String buyerName;
+
+    @TableField(exist = false)
+    private String sellerName;
 }

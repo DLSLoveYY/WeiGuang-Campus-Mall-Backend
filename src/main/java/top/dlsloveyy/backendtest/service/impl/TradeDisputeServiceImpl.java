@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import top.dlsloveyy.backendtest.entity.CustomerServiceCase;
 import top.dlsloveyy.backendtest.entity.TradeDispute;
 import top.dlsloveyy.backendtest.entity.TradeOrder;
 import top.dlsloveyy.backendtest.entity.User;
@@ -22,6 +23,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static top.dlsloveyy.backendtest.constant.CustomerServiceCaseStatus.IN_PROGRESS;
+import static top.dlsloveyy.backendtest.constant.CustomerServiceCaseStatus.PENDING_ASSIGN;
+import static top.dlsloveyy.backendtest.constant.CustomerServiceCaseStatus.WAITING_EVIDENCE;
 import static top.dlsloveyy.backendtest.constant.DisputeStatus.BUYER_WON;
 import static top.dlsloveyy.backendtest.constant.DisputeStatus.CLOSED;
 import static top.dlsloveyy.backendtest.constant.DisputeStatus.IN_REVIEW;
@@ -209,6 +213,7 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
 
         if (decision == BUYER_WON) {
             order.setStatus(REFUNDED);
+            order.setRefundStage(6);
             order.setUpdateTime(LocalDateTime.now());
             tradeOrderMapper.updateById(order);
 
@@ -236,9 +241,24 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
             applyCreditChange(order.getSellerId(), -8);
             applyCreditChange(order.getBuyerId(), 2);
         } else {
-            order.setStatus(SHIPPED_PENDING_RECEIPT);
-            order.setUpdateTime(LocalDateTime.now());
+            LocalDateTime now = LocalDateTime.now();
+            order.setStatus(top.dlsloveyy.backendtest.constant.OrderStatus.COMPLETED);
+            order.setRefundStage(7);
+            order.setUpdateTime(now);
+            order.setFinishTime(now);
             tradeOrderMapper.updateById(order);
+
+            BigDecimal escrowAmount = resolveEscrowAmount(order);
+            if (escrowAmount.compareTo(BigDecimal.ZERO) > 0) {
+                accountService.unfreeze(
+                        order.getSellerId(),
+                        escrowAmount,
+                        "ORDER_SETTLE_UNFROZEN",
+                        String.valueOf(order.getId()),
+                        "ORDER_SETTLE_UNFROZEN:" + order.getId() + ":" + order.getSellerId(),
+                        "争议裁决卖家胜，强制完成订单并结算"
+                );
+            }
 
             applyCreditChange(order.getBuyerId(), -5);
             applyCreditChange(order.getSellerId(), 2);
@@ -285,19 +305,30 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
         if (order.getStatus() != SHIPPED_PENDING_RECEIPT) {
             return ResponseResult.error("当前订单状态不支持客服介入");
         }
+        if (order.getRefundStage() == null || order.getRefundStage() != 7) {
+            return ResponseResult.error("当前订单尚未进入退款被拒绝状态");
+        }
+
+        boolean activeCaseExists = customerServiceCaseService.lambdaQuery()
+                .eq(CustomerServiceCase::getOrderId, orderId)
+                .in(CustomerServiceCase::getStatus,
+                        PENDING_ASSIGN,
+                        IN_PROGRESS,
+                        WAITING_EVIDENCE)
+                .exists();
+        if (activeCaseExists) {
+            return ResponseResult.error("该订单已有处理中客服工单");
+        }
 
         TradeDispute latestDispute = this.getOne(new LambdaQueryWrapper<TradeDispute>()
                 .eq(TradeDispute::getOrderId, orderId)
                 .orderByDesc(TradeDispute::getCreateTime)
                 .last("limit 1"));
-        if (latestDispute == null) {
-            return ResponseResult.error("请先发起退款申请后再申请客服介入");
-        }
-        if (!buyerId.equals(latestDispute.getBuyerId())) {
+        if (latestDispute != null && !buyerId.equals(latestDispute.getBuyerId())) {
             return ResponseResult.error("无权操作该争议单");
         }
 
-        if (latestDispute.getStatus() == OPEN || latestDispute.getStatus() == IN_REVIEW) {
+        if (latestDispute != null && (latestDispute.getStatus() == OPEN || latestDispute.getStatus() == IN_REVIEW)) {
             latestDispute.setStatus(CLOSED);
             latestDispute.setResolution("SELLER_REJECTED_REFUND");
             latestDispute.setUpdateTime(LocalDateTime.now());
@@ -310,7 +341,9 @@ public class TradeDisputeServiceImpl extends ServiceImpl<TradeDisputeMapper, Tra
         newDispute.setBuyerId(buyerId);
         newDispute.setSellerId(order.getSellerId());
         newDispute.setReason(reason == null ? "卖家拒绝后申请客服介入" : reason);
-        newDispute.setBuyerEvidence(buyerEvidence);
+        newDispute.setBuyerEvidence((buyerEvidence == null || buyerEvidence.isBlank())
+                ? (order.getRefundApplyPacket() == null || order.getRefundApplyPacket().isBlank() ? order.getRefundReason() : order.getRefundApplyPacket())
+                : buyerEvidence);
         newDispute.setStatus(IN_REVIEW);
         newDispute.setCreateTime(LocalDateTime.now());
         newDispute.setUpdateTime(LocalDateTime.now());

@@ -15,10 +15,11 @@ import top.dlsloveyy.backendtest.mapper.FollowMapper;
 import top.dlsloveyy.backendtest.mapper.GoodsMapper;
 import top.dlsloveyy.backendtest.mapper.UserMapper;
 import top.dlsloveyy.backendtest.service.AccountService;
+import top.dlsloveyy.backendtest.service.UserAddressService;
 import top.dlsloveyy.backendtest.service.UserService;
 import top.dlsloveyy.backendtest.util.JwtUtil;
 
-import java.math.BigDecimal; // 🚀 必须引入 BigDecimal
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,11 +47,13 @@ public class UserController {
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
+    @Autowired
+    private UserAddressService userAddressService;
+
     private final UserService userService;
 
     private final AccountService accountService;
 
-    // ✅ 登录接口（5次/分钟 IP 限流，防暴力破解）
     @RateLimit(max = 5, window = 60)
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody User loginUser) {
@@ -70,28 +73,28 @@ public class UserController {
             return ResponseEntity.ok(Map.of("code", 403, "message", "账号已被封禁，请联系管理员"));
         }
 
-        // 双Token：生成 AccessToken（15分钟）和 RefreshToken（7天）
-        String accessToken  = jwtUtil.generateAccessToken(user.getId(), username);
+        String accessToken = jwtUtil.generateAccessToken(user.getId(), username);
         String refreshToken = jwtUtil.generateRefreshToken(user.getId());
 
-        // RefreshToken 存入 Redis，key 按 userId，用于刷新校验和登出失效
         redisTemplate.opsForValue().set("refresh_token:" + user.getId(), refreshToken, 7, TimeUnit.DAYS);
-        // 保留旧式 key 兼容 logout 删除逻辑
         redisTemplate.opsForValue().set("token:" + username, accessToken, 7, TimeUnit.DAYS);
 
-        return ResponseEntity.ok(Map.of(
-                "code", 200,
-                "message", "登录成功",
-                "token", accessToken,        // 旧字段，保持前端兼容
-                "accessToken", accessToken,
-                "refreshToken", refreshToken,
-                "id", user.getId(),
-                "username", user.getUsername(),
-                "isAdmin", user.getIsAdmin()
-        ));
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 200);
+        result.put("message", "登录成功");
+        result.put("token", accessToken);
+        result.put("accessToken", accessToken);
+        result.put("refreshToken", refreshToken);
+        result.put("id", user.getId());
+        result.put("username", user.getUsername());
+        result.put("avatar", user.getAvatar());
+        result.put("signature", user.getSignature());
+        result.put("gender", user.getGender());
+        result.put("age", user.getAge());
+        result.put("isAdmin", user.getIsAdmin());
+        return ResponseEntity.ok(result);
     }
 
-    // ✅ 注册接口
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody User user) {
         LambdaQueryWrapper<User> checkWrapper = new LambdaQueryWrapper<>();
@@ -108,15 +111,12 @@ public class UserController {
         user.setIsAdmin(false);
         user.setPoints(0);
         user.setCreditScore(100);
-
-        // 🚀 修改位置：将 0.0 修改为 BigDecimal.ZERO
         user.setBalance(BigDecimal.ZERO);
 
         userMapper.insert(user);
         return ResponseEntity.ok(Map.of("code", 200, "message", "注册成功"));
     }
 
-    // ✅ 获取用户信息
     @GetMapping("/info")
     public ResponseEntity<?> getUserInfo(@RequestHeader("Authorization") String token) {
         String username = jwtUtil.extractUsername(token.replace("Bearer ", ""));
@@ -143,13 +143,12 @@ public class UserController {
         result.put("profileLng", user.getProfileLng());
         result.put("profileLat", user.getProfileLat());
         result.put("creditScore", user.getCreditScore());
-        result.put("balance", user.getBalance()); // 这里直接返回 BigDecimal 对象，JSON 序列化会自动处理
+        result.put("balance", user.getBalance());
         result.put("frozenBalance", user.getFrozenBalance());
 
         return ResponseEntity.ok(result);
     }
 
-    // ✅ 更新用户信息
     @PutMapping("/update")
     public ResponseEntity<?> updateUserInfo(@RequestHeader("Authorization") String token,
                                             @RequestBody Map<String, Object> updateData) {
@@ -176,6 +175,9 @@ public class UserController {
         String dormBuilding = (String) updateData.get("dormBuilding");
         BigDecimal profileLng = updateData.get("profileLng") != null ? new BigDecimal(updateData.get("profileLng").toString()) : null;
         BigDecimal profileLat = updateData.get("profileLat") != null ? new BigDecimal(updateData.get("profileLat").toString()) : null;
+        BigDecimal previousProfileLng = user.getProfileLng();
+        BigDecimal previousProfileLat = user.getProfileLat();
+        String previousDormBuilding = user.getDormBuilding();
 
         if (newUsername != null && !newUsername.equals(user.getUsername())) {
             LambdaQueryWrapper<User> checkWrapper = new LambdaQueryWrapper<>();
@@ -192,10 +194,29 @@ public class UserController {
         if (signature != null) user.setSignature(signature);
         if (gender != null) user.setGender(gender);
         if (age != null) user.setAge(age);
-
         if (contactPhone != null) user.setContactPhone(contactPhone);
         if (wechatId != null) user.setWechatId(wechatId);
         if (dormBuilding != null) user.setDormBuilding(dormBuilding);
+
+        if (!sameText(previousDormBuilding, user.getDormBuilding())
+                && sameBigDecimal(previousProfileLng, profileLng)
+                && sameBigDecimal(previousProfileLat, profileLat)) {
+            profileLng = null;
+            profileLat = null;
+        }
+
+        if ((profileLng == null || profileLat == null)
+                && user.getDormBuilding() != null
+                && !user.getDormBuilding().isBlank()) {
+            Map<String, Object> geo = userAddressService.geocodeTextAddress(user.getDormBuilding());
+            BigDecimal autoLng = toBigDecimal(geo.get("longitude"));
+            BigDecimal autoLat = toBigDecimal(geo.get("latitude"));
+            if (autoLng != null && autoLat != null) {
+                profileLng = autoLng;
+                profileLat = autoLat;
+            }
+        }
+
         user.setProfileLng(profileLng);
         user.setProfileLat(profileLat);
 
@@ -217,7 +238,6 @@ public class UserController {
         return ResponseEntity.ok(Map.of("isAdmin", user.getIsAdmin()));
     }
 
-    // ✅ 更新用户积分
     @PostMapping("/update-points")
     public ResponseEntity<String> updateUserPoints(@RequestHeader("Authorization") String token) {
         String username = jwtUtil.extractUsername(token.replace("Bearer ", ""));
@@ -240,7 +260,6 @@ public class UserController {
         return ResponseEntity.ok("积分更新成功");
     }
 
-    // ✅ 获取指定用户的公开信息
     @GetMapping("/public-info/{id}")
     public ResponseEntity<?> getPublicUserInfo(@PathVariable Long id) {
         User user = userMapper.selectById(id);
@@ -261,7 +280,6 @@ public class UserController {
         return ResponseEntity.ok(result);
     }
 
-    // ✅ 获取指定用户的关注对象
     @GetMapping("/public-followees/{id}")
     public ResponseEntity<?> getPublicFollowees(@PathVariable Long id) {
         User user = userMapper.selectById(id);
@@ -295,7 +313,6 @@ public class UserController {
         return ResponseEntity.ok(result);
     }
 
-    // ✅ 获取指定卖家的公开闲置（在售 + 已售出）
     @GetMapping("/public-goods/{id}")
     public ResponseEntity<?> getPublicGoods(@PathVariable Long id) {
         User user = userMapper.selectById(id);
@@ -310,33 +327,26 @@ public class UserController {
 
         return ResponseEntity.ok(goodsList);
     }
-    // ==================== 卖家商品管理 ====================
 
-    // ✅ 获取当前登录卖家的“全部闲置”（不限制状态，包含已售出和在售）
     @GetMapping("/my-goods")
     public ResponseEntity<?> getMyGoods(@RequestHeader("Authorization") String authHeader) {
         try {
-            // 1. 解析当前登录用户
             String username = jwtUtil.extractUsername(authHeader.replace("Bearer ", ""));
             User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
             if (user == null) {
                 return ResponseEntity.status(404).body("用户不存在");
             }
 
-            // 2. 查询该用户的所有商品（注意：这里没有 .eq(Goods::getStatus, 1) 的限制）
             List<Goods> myGoodsList = goodsMapper.selectList(new LambdaQueryWrapper<Goods>()
                     .eq(Goods::getSellerId, user.getId())
                     .orderByDesc(Goods::getCreateTime));
 
-            // 3. 返回数据
             return ResponseEntity.ok(myGoodsList);
-
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("加载闲置列表失败");
         }
     }
 
-    // ✅ 获取当前用户信息
     @GetMapping("/me")
     public ResponseEntity<?> getCurrentUser(@RequestHeader("Authorization") String authHeader) {
         String username = jwtUtil.extractUsername(authHeader.replace("Bearer ", ""));
@@ -372,7 +382,6 @@ public class UserController {
         return ResponseEntity.ok(safeUser);
     }
 
-    // ✅ 退出登录
     @PostMapping("/logout")
     public ResponseEntity<?> logout(@RequestHeader("Authorization") String token) {
         try {
@@ -389,9 +398,7 @@ public class UserController {
             return ResponseEntity.badRequest().body(Map.of("code", 400, "message", "退出失败或Token无效"));
         }
     }
-    // ==================== 资金管理：充值与提现 ====================
 
-    // ✅ 模拟充值接口
     @PostMapping("/recharge")
     public ResponseEntity<?> recharge(@RequestHeader("Authorization") String token, @RequestBody Map<String, Object> params) {
         try {
@@ -399,7 +406,6 @@ public class UserController {
             User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
             if (user == null) return ResponseEntity.status(404).body(Map.of("code", 404, "message", "用户不存在"));
 
-            // 提取金额并转换为 BigDecimal
             BigDecimal amount = new BigDecimal(params.get("amount").toString());
             if (amount.compareTo(BigDecimal.ZERO) <= 0) {
                 return ResponseEntity.badRequest().body(Map.of("code", 400, "message", "充值金额必须大于0"));
@@ -420,7 +426,6 @@ public class UserController {
         }
     }
 
-    // ✅ 模拟提现接口
     @PostMapping("/withdraw")
     public ResponseEntity<?> withdraw(@RequestHeader("Authorization") String token, @RequestBody Map<String, Object> params) {
         try {
@@ -445,6 +450,37 @@ public class UserController {
             return ResponseEntity.ok(Map.of("code", 200, "message", "提现申请已提交，预计24小时内到账微信/支付宝"));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("code", 400, "message", e.getMessage()));
+        }
+    }
+
+    private boolean sameText(String left, String right) {
+        String a = left == null ? "" : left.trim();
+        String b = right == null ? "" : right.trim();
+        return a.equals(b);
+    }
+
+    private boolean sameBigDecimal(BigDecimal left, BigDecimal right) {
+        if (left == null && right == null) {
+            return true;
+        }
+        if (left == null || right == null) {
+            return false;
+        }
+        return left.compareTo(right) == 0;
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(text);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 }

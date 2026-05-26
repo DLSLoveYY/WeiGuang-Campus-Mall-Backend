@@ -2,6 +2,8 @@ package top.dlsloveyy.backendtest.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,17 +12,25 @@ import top.dlsloveyy.backendtest.entity.CustomerServiceCaseAction;
 import top.dlsloveyy.backendtest.mapper.CustomerServiceCaseActionMapper;
 import top.dlsloveyy.backendtest.mapper.CustomerServiceCaseMapper;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
+import top.dlsloveyy.backendtest.model.vo.CustomerServiceCaseFullDetailVO;
+import top.dlsloveyy.backendtest.model.vo.EvidenceTimelineItemVO;
 import top.dlsloveyy.backendtest.service.AccountService;
 import top.dlsloveyy.backendtest.service.CustomerServiceCaseService;
 import top.dlsloveyy.backendtest.service.OperationAuditLogService;
+import top.dlsloveyy.backendtest.service.UserNotificationService;
 import top.dlsloveyy.backendtest.entity.TradeDispute;
 import top.dlsloveyy.backendtest.entity.TradeOrder;
+import top.dlsloveyy.backendtest.entity.User;
 import top.dlsloveyy.backendtest.mapper.TradeDisputeMapper;
 import top.dlsloveyy.backendtest.mapper.TradeOrderMapper;
+import top.dlsloveyy.backendtest.mapper.UserMapper;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static top.dlsloveyy.backendtest.constant.CustomerServiceCaseStatus.IN_PROGRESS;
@@ -43,6 +53,9 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
     private OperationAuditLogService operationAuditLogService;
 
     @Autowired
+    private UserNotificationService userNotificationService;
+
+    @Autowired
     private TradeDisputeMapper tradeDisputeMapper;
 
     @Autowired
@@ -50,6 +63,12 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
 
     @Autowired
     private AccountService accountService;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private UserMapper userMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -72,8 +91,37 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
         csCase.setUpdateTime(LocalDateTime.now());
         if ("REQUEST_EVIDENCE".equals(actionType)) {
             csCase.setStatus(WAITING_EVIDENCE);
+            userNotificationService.notifyUser(
+                    csCase.getBuyerId(),
+                    "CS_REQUEST_EVIDENCE",
+                    "客服要求补充证据",
+                    "客服已要求补充交易凭证，请尽快进入工单补充说明与附件。",
+                    "CUSTOMER_SERVICE_CASE",
+                    caseId
+            );
+            if (csCase.getSellerId() != null && csCase.getSellerId() > 0) {
+                userNotificationService.notifyUser(
+                        csCase.getSellerId(),
+                        "CS_REQUEST_EVIDENCE",
+                        "客服要求补充证据",
+                        "客服已要求补充交易凭证，请尽快进入工单补充说明与附件。",
+                        "CUSTOMER_SERVICE_CASE",
+                        caseId
+                );
+            }
         } else if ("EVIDENCE_ADDED".equals(actionType) && csCase.getStatus() == WAITING_EVIDENCE) {
             csCase.setStatus(IN_PROGRESS);
+            Long notifyTarget = "ADMIN".equalsIgnoreCase(actorRole) ? csCase.getBuyerId() : csCase.getAssignedAdminId();
+            if (notifyTarget != null && notifyTarget > 0) {
+                userNotificationService.notifyUser(
+                        notifyTarget,
+                        "CS_EVIDENCE_ADDED",
+                        "工单有新证据",
+                        "有用户补充了新的交易证据，请及时查看。",
+                        "CUSTOMER_SERVICE_CASE",
+                        caseId
+                );
+            }
         }
         customerServiceCaseMapper.updateById(csCase);
         return ResponseResult.success("工单记录已更新");
@@ -148,6 +196,7 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
                                                String category,
                                                String title,
                                                String detail,
+                                               String attachments,
                                                Integer priority) {
         if (buyerId == null) {
             return ResponseResult.error("请先登录");
@@ -175,7 +224,7 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
         csCase.setSlaDeadlineTime(LocalDateTime.now().plusHours(24));
         customerServiceCaseMapper.insert(csCase);
 
-        writeAction(csCase.getId(), buyerId, "USER", "REQUEST", detail, null);
+        writeAction(csCase.getId(), buyerId, "USER", "REQUEST", detail, attachments);
         operationAuditLogService.log(
                 buyerId,
                 "USER",
@@ -254,6 +303,7 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
 
         if (decision == BUYER_WON) {
             order.setStatus(top.dlsloveyy.backendtest.constant.OrderStatus.REFUNDED);
+            order.setRefundStage(6);
             order.setUpdateTime(LocalDateTime.now());
             tradeOrderMapper.updateById(order);
 
@@ -278,9 +328,24 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
                     "客服裁决买家胜，退款入账"
             );
         } else {
-            order.setStatus(top.dlsloveyy.backendtest.constant.OrderStatus.SHIPPED_PENDING_RECEIPT);
-            order.setUpdateTime(LocalDateTime.now());
+            LocalDateTime now = LocalDateTime.now();
+            order.setStatus(top.dlsloveyy.backendtest.constant.OrderStatus.COMPLETED);
+            order.setRefundStage(7);
+            order.setUpdateTime(now);
+            order.setFinishTime(now);
             tradeOrderMapper.updateById(order);
+
+            BigDecimal escrowAmount = resolveEscrowAmount(order);
+            if (escrowAmount.compareTo(BigDecimal.ZERO) > 0) {
+                accountService.unfreeze(
+                        order.getSellerId(),
+                        escrowAmount,
+                        "ORDER_SETTLE_UNFROZEN",
+                        String.valueOf(order.getId()),
+                        "ORDER_SETTLE_UNFROZEN:" + order.getId() + ":" + order.getSellerId(),
+                        "客服裁决卖家胜，强制完成订单并结算"
+                );
+            }
         }
 
         operationAuditLogService.log(
@@ -349,7 +414,9 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
             query.eq(CustomerServiceCase::getAssignedAdminId, assignedAdminId);
         }
         query.orderByDesc(CustomerServiceCase::getCreateTime);
-        return ResponseResult.success(customerServiceCaseMapper.selectList(query));
+        List<CustomerServiceCase> cases = customerServiceCaseMapper.selectList(query);
+        fillCaseUsernames(cases);
+        return ResponseResult.success(cases);
     }
 
     @Override
@@ -361,7 +428,9 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
             query.eq(CustomerServiceCase::getBuyerId, userId);
         }
         query.orderByDesc(CustomerServiceCase::getCreateTime);
-        return ResponseResult.success(customerServiceCaseMapper.selectList(query));
+        List<CustomerServiceCase> cases = customerServiceCaseMapper.selectList(query);
+        fillCaseUsernames(cases);
+        return ResponseResult.success(cases);
     }
 
     @Override
@@ -376,6 +445,53 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
             return ResponseResult.error(403, "无权查看该工单");
         }
         return ResponseResult.success(csCase);
+    }
+
+    @Override
+    public ResponseResult<CustomerServiceCaseFullDetailVO> getCaseFullDetail(Long caseId, Long operatorId, Boolean isAdmin) {
+        CustomerServiceCase csCase = customerServiceCaseMapper.selectById(caseId);
+        if (csCase == null) {
+            return ResponseResult.error("工单不存在");
+        }
+        if (!Boolean.TRUE.equals(isAdmin)
+                && !operatorId.equals(csCase.getBuyerId())
+                && !operatorId.equals(csCase.getSellerId())) {
+            return ResponseResult.error(403, "无权查看该工单");
+        }
+
+        CustomerServiceCaseFullDetailVO detail = new CustomerServiceCaseFullDetailVO();
+        detail.setCaseInfo(csCase);
+
+        List<CustomerServiceCaseAction> actions = caseActionMapper.selectList(new LambdaQueryWrapper<CustomerServiceCaseAction>()
+                .eq(CustomerServiceCaseAction::getCaseId, caseId)
+                .orderByAsc(CustomerServiceCaseAction::getCreateTime));
+        detail.setActions(actions);
+
+        if (csCase.getDisputeId() != null && csCase.getDisputeId() > 0) {
+            detail.setDispute(tradeDisputeMapper.selectById(csCase.getDisputeId()));
+        }
+
+        if (csCase.getOrderId() != null && csCase.getOrderId() > 0) {
+            TradeOrder order = tradeOrderMapper.selectById(csCase.getOrderId());
+            if (order != null) {
+                CustomerServiceCaseFullDetailVO.OrderRefundInfoVO refund = new CustomerServiceCaseFullDetailVO.OrderRefundInfoVO();
+                refund.setOrderId(order.getId());
+                refund.setOrderNo(order.getOrderNo());
+                refund.setOrderStatus(order.getStatus());
+                refund.setRefundType(order.getRefundType());
+                refund.setRefundStage(order.getRefundStage());
+                refund.setRefundRequestedAmount(order.getRefundRequestedAmount());
+                refund.setRefundApprovedAmount(order.getRefundApprovedAmount());
+                refund.setRefundReason(order.getRefundReason());
+                refund.setRefundReasonCode(order.getRefundReasonCode());
+                refund.setRefundApplyPacketRaw(order.getRefundApplyPacket());
+                refund.setRefundApplyPacketObj(parseRefundPacket(order.getRefundApplyPacket()));
+                detail.setOrderRefund(refund);
+            }
+        }
+
+        detail.setEvidenceTimeline(buildEvidenceTimeline(actions));
+        return ResponseResult.success(detail);
     }
 
     @Override
@@ -401,6 +517,90 @@ public class CustomerServiceCaseServiceImpl extends ServiceImpl<CustomerServiceC
         action.setAttachments(attachments);
         action.setCreateTime(LocalDateTime.now());
         caseActionMapper.insert(action);
+    }
+
+    private Map<String, Object> parseRefundPacket(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            return objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception ex) {
+            Map<String, Object> fallback = new LinkedHashMap<>();
+            fallback.put("raw", raw);
+            return fallback;
+        }
+    }
+
+    private void fillCaseUsernames(List<CustomerServiceCase> cases) {
+        if (cases == null || cases.isEmpty()) {
+            return;
+        }
+        Map<Long, User> userMap = new HashMap<>();
+        for (CustomerServiceCase csCase : cases) {
+            if (csCase == null) {
+                continue;
+            }
+            if (csCase.getBuyerId() != null) {
+                userMap.putIfAbsent(csCase.getBuyerId(), null);
+            }
+            if (csCase.getSellerId() != null && csCase.getSellerId() > 0) {
+                userMap.putIfAbsent(csCase.getSellerId(), null);
+            }
+        }
+        if (userMap.isEmpty()) {
+            return;
+        }
+        List<User> users = userMapper.selectBatchIds(userMap.keySet());
+        if (users != null) {
+            for (User user : users) {
+                if (user != null && user.getId() != null) {
+                    userMap.put(user.getId(), user);
+                }
+            }
+        }
+        for (CustomerServiceCase csCase : cases) {
+            if (csCase == null) {
+                continue;
+            }
+            User buyer = userMap.get(csCase.getBuyerId());
+            User seller = userMap.get(csCase.getSellerId());
+            csCase.setBuyerName(buyer == null ? null : buyer.getUsername());
+            csCase.setSellerName(seller == null ? null : seller.getUsername());
+        }
+    }
+
+    private List<EvidenceTimelineItemVO> buildEvidenceTimeline(List<CustomerServiceCaseAction> actions) {
+        List<EvidenceTimelineItemVO> timeline = new java.util.ArrayList<>();
+        if (actions == null) {
+            return timeline;
+        }
+        for (CustomerServiceCaseAction action : actions) {
+            if (action == null) {
+                continue;
+            }
+            if (!"EVIDENCE_ADDED".equals(action.getActionType()) && !"REQUEST_EVIDENCE".equals(action.getActionType())) {
+                continue;
+            }
+            EvidenceTimelineItemVO item = new EvidenceTimelineItemVO();
+            item.setSourceType("CASE_ACTION");
+            item.setParty(action.getActorRole());
+            item.setActionType(action.getActionType());
+            item.setTitle("REQUEST_EVIDENCE".equals(action.getActionType()) ? "催补证" : "补充证据");
+            item.setContent(action.getContent());
+            if (action.getAttachments() != null && !action.getAttachments().isBlank()) {
+                String[] parts = action.getAttachments().split("\\n");
+                for (String part : parts) {
+                    String trimmed = part == null ? "" : part.trim();
+                    if (!trimmed.isEmpty()) {
+                        item.getAttachments().add(trimmed);
+                    }
+                }
+            }
+            item.setCreateTime(action.getCreateTime() == null ? null : action.getCreateTime().toString());
+            timeline.add(item);
+        }
+        return timeline;
     }
 
     private BigDecimal resolveEscrowAmount(TradeOrder order) {

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import top.dlsloveyy.backendtest.entity.CustomerServiceCase;
 import top.dlsloveyy.backendtest.entity.CustomerServiceCaseAction;
 import top.dlsloveyy.backendtest.model.dto.ResponseResult;
+import top.dlsloveyy.backendtest.model.vo.CustomerServiceCaseFullDetailVO;
 
 import java.util.List;
 
@@ -31,6 +32,7 @@ public interface CustomerServiceCaseService extends IService<CustomerServiceCase
                                         String category,
                                         String title,
                                         String detail,
+                                        String attachments,
                                         Integer priority);
 
     ResponseResult<?> assignCase(Long caseId, Long adminId, Long operatorId);
@@ -44,6 +46,8 @@ public interface CustomerServiceCaseService extends IService<CustomerServiceCase
     ResponseResult<List<CustomerServiceCase>> listMyCases(Long userId, Boolean asSeller);
 
     ResponseResult<CustomerServiceCase> getCaseDetail(Long caseId, Long operatorId, Boolean isAdmin);
+
+    ResponseResult<CustomerServiceCaseFullDetailVO> getCaseFullDetail(Long caseId, Long operatorId, Boolean isAdmin);
 
     CustomerServiceCase getActiveCaseByDisputeId(Long disputeId);
 }

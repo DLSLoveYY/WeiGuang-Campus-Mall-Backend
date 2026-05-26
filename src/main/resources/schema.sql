@@ -211,10 +211,80 @@ SET @ddl := (
   SELECT IF(
     EXISTS(
       SELECT 1 FROM information_schema.columns
-      WHERE table_schema = DATABASE() AND table_name = 'goods' AND column_name = 'trade_geo_source'
+      WHERE table_schema = DATABASE() AND table_name = 'trade_order' AND column_name = 'variant_id'
     ),
     'SELECT 1',
-    'ALTER TABLE goods ADD COLUMN trade_geo_source VARCHAR(20)'
+    'ALTER TABLE trade_order ADD COLUMN variant_id BIGINT'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'trade_order' AND column_name = 'variant_name_snapshot'
+    ),
+    'SELECT 1',
+    'ALTER TABLE trade_order ADD COLUMN variant_name_snapshot VARCHAR(64)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'trade_order' AND column_name = 'variant_option_snapshot'
+    ),
+    'SELECT 1',
+    'ALTER TABLE trade_order ADD COLUMN variant_option_snapshot VARCHAR(64)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'trade_order' AND column_name = 'variant_description_snapshot'
+    ),
+    'SELECT 1',
+    'ALTER TABLE trade_order ADD COLUMN variant_description_snapshot VARCHAR(255)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'trade_order' AND column_name = 'unit_price_snapshot'
+    ),
+    'SELECT 1',
+    'ALTER TABLE trade_order ADD COLUMN unit_price_snapshot DECIMAL(10,2)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = DATABASE() AND table_name = 'goods_variant'
+    ),
+    'SELECT 1',
+    'CREATE TABLE goods_variant ( id BIGINT PRIMARY KEY AUTO_INCREMENT, goods_id BIGINT NOT NULL, variant_name VARCHAR(64) NOT NULL, option_name VARCHAR(64) NOT NULL, price DECIMAL(10,2) NOT NULL, original_price DECIMAL(10,2), stock INT NOT NULL DEFAULT 0, description VARCHAR(255), sort_order INT NOT NULL DEFAULT 0, enabled BOOLEAN NOT NULL DEFAULT TRUE, create_time DATETIME NOT NULL, update_time DATETIME NOT NULL, INDEX idx_goods_variant_goods_id (goods_id), INDEX idx_goods_variant_enabled (enabled) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
   )
 );
 PREPARE stmt FROM @ddl;
@@ -387,12 +457,101 @@ CREATE TABLE IF NOT EXISTS goods_draft (
   original_price DECIMAL(10,2),
   category VARCHAR(50),
   delivery_type VARCHAR(50),
+  delivery_methods VARCHAR(100),
   cover_img VARCHAR(255),
+  images TEXT,
+  stock INT,
+  condition_level VARCHAR(20),
+  trade_address VARCHAR(255),
+  variants_json TEXT,
   create_time DATETIME NOT NULL,
   INDEX idx_goods_draft_seller_id (seller_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 9. 交易评价表
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods_draft' AND column_name = 'delivery_methods'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods_draft ADD COLUMN delivery_methods VARCHAR(100)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods_draft' AND column_name = 'images'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods_draft ADD COLUMN images TEXT'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods_draft' AND column_name = 'stock'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods_draft ADD COLUMN stock INT'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods_draft' AND column_name = 'condition_level'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods_draft ADD COLUMN condition_level VARCHAR(20)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods_draft' AND column_name = 'trade_address'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods_draft ADD COLUMN trade_address VARCHAR(255)'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @ddl := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'goods_draft' AND column_name = 'variants_json'
+    ),
+    'SELECT 1',
+    'ALTER TABLE goods_draft ADD COLUMN variants_json TEXT'
+  )
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 CREATE TABLE IF NOT EXISTS trade_review (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   order_id BIGINT NOT NULL,

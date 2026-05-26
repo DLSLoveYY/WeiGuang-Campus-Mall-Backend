@@ -188,4 +188,70 @@ public class TradeReviewController {
         double roundedAvg = Math.round(avgScore * 10.0) / 10.0;
         return ResponseEntity.ok(Map.of("code", 200, "data", result, "avgScore", roundedAvg, "total", reviews.size()));
     }
+
+    /**
+     * 获取某商品对应订单完成后的公开评价（供商品详情页展示）
+     */
+    @GetMapping("/goods/{goodsId}")
+    public ResponseEntity<?> getGoodsReviews(@PathVariable Long goodsId) {
+        List<TradeOrder> orders = tradeOrderMapper.selectList(
+                new LambdaQueryWrapper<TradeOrder>()
+                        .eq(TradeOrder::getGoodsId, goodsId)
+                        .orderByDesc(TradeOrder::getFinishTime)
+        );
+
+        if (orders.isEmpty()) {
+            return ResponseEntity.ok(Map.of("code", 200, "data", List.of(), "avgScore", 0.0, "total", 0));
+        }
+
+        List<Long> orderIds = orders.stream().map(TradeOrder::getId).toList();
+        Map<Long, TradeOrder> orderMap = orders.stream().collect(Collectors.toMap(TradeOrder::getId, o -> o));
+
+        List<TradeReview> reviews = tradeReviewMapper.selectList(
+                new LambdaQueryWrapper<TradeReview>()
+                        .in(TradeReview::getOrderId, orderIds)
+                        .eq(TradeReview::getRole, "buyer")
+                        .orderByDesc(TradeReview::getCreateTime)
+        );
+
+        if (reviews.isEmpty()) {
+            return ResponseEntity.ok(Map.of("code", 200, "data", List.of(), "avgScore", 0.0, "total", 0));
+        }
+
+        double avgScore = reviews.stream()
+                .mapToInt(TradeReview::getScore)
+                .average()
+                .orElse(0.0);
+
+        List<Long> reviewerIds = reviews.stream().map(TradeReview::getReviewerId).distinct().collect(Collectors.toList());
+        Map<Long, User> reviewerMap = userMapper.selectBatchIds(reviewerIds)
+                .stream().collect(Collectors.toMap(User::getId, u -> u));
+
+        Goods goods = goodsMapper.selectById(goodsId);
+        String goodsTitle = goods != null ? goods.getTitle() : ("商品 #" + goodsId);
+
+        List<Map<String, Object>> result = reviews.stream().map(r -> {
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", r.getId());
+            item.put("orderId", r.getOrderId());
+            item.put("score", r.getScore());
+            item.put("content", r.getContent());
+            item.put("createTime", r.getCreateTime());
+            item.put("goodsId", goodsId);
+            item.put("goodsTitle", goodsTitle);
+            TradeOrder order = orderMap.get(r.getOrderId());
+            if (order != null) {
+                item.put("finishTime", order.getFinishTime());
+            }
+            User reviewer = reviewerMap.get(r.getReviewerId());
+            if (reviewer != null) {
+                item.put("reviewerName", reviewer.getUsername());
+                item.put("reviewerAvatar", reviewer.getAvatar() != null ? reviewer.getAvatar() : "");
+            }
+            return item;
+        }).collect(Collectors.toList());
+
+        double roundedAvg = Math.round(avgScore * 10.0) / 10.0;
+        return ResponseEntity.ok(Map.of("code", 200, "data", result, "avgScore", roundedAvg, "total", reviews.size()));
+    }
 }

@@ -27,6 +27,16 @@ public class TradeOrder {
 
     private Long goodsId; // 关联的商品ID
 
+    private Long variantId; // 购买的规格选项ID
+
+    private String variantNameSnapshot; // 规格名快照
+
+    private String variantOptionSnapshot; // 规格选项快照
+
+    private String variantDescriptionSnapshot; // 规格说明快照
+
+    private BigDecimal unitPriceSnapshot; // 下单时单价快照
+
     // --- 财务对账核心字段 ---
     private BigDecimal orderPrice; // 买家实际支付的总金额
 
